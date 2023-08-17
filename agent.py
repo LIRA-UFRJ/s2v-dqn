@@ -3,26 +3,28 @@ import random
 import time
 from collections import namedtuple, deque
 
-from model import QNetwork
+from model import QNetwork, MPNN
 from replay_buffer import ReplayBuffer
 
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
 
-BUFFER_SIZE = int(1e5)  # replay buffer size
-BATCH_SIZE = 16         # minibatch size
-GAMMA = 1.00            # discount factor
-TAU = 1e-3              # for soft update of target parameters
-LR = 5e-4               # learning rate 
-UPDATE_EVERY = 4        # how often to update the network
+BUFFER_SIZE = int(1e5)   # replay buffer size
+BATCH_SIZE = 16          # minibatch size
+GAMMA = 0.10             # discount factor
+TAU = 1e-3               # for soft update of target parameters
+LR = 5e-2                # learning rate 
+CLIP_GRAD_NORM_VALUE = 5 # value of gradient to clip while training
+UPDATE_TARGET_EACH = 100 # number of steps to wait until updating target network
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class Agent():
     """Interacts with and learns from the environment."""
 
-    def __init__(self, nstep, embed_dim=32, T=4, seed=None):
+    def __init__(self, nstep, embed_dim=64, T=4, seed=None, gamma=GAMMA,
+                 clip_grad_norm_value=CLIP_GRAD_NORM_VALUE):
         """Initialize an Agent object.
         
         Params
@@ -35,16 +37,22 @@ class Agent():
         if seed is not None:
             random.seed(seed)
 
+        self.gamma = gamma
+        self.clip_grad_norm_value = clip_grad_norm_value
+        
         # Q-Network
         self.qnetwork_local = QNetwork(embed_dim, T, seed).to(device)
         self.qnetwork_target = QNetwork(embed_dim, T, seed).to(device)
+        self.hard_update(self.qnetwork_local, self.qnetwork_target)
         self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=LR)
+        self.losses = []
+        self.update_t_step = 0
 
         # Replay memory
         self.memory = ReplayBuffer(BUFFER_SIZE, BATCH_SIZE, seed)
 
         # To be used in n-step learning
-        self.discounting_oldest_reward = GAMMA**(self.nstep-1)
+        self.discounting_oldest_reward = self.gamma**(self.nstep-1)
 
         # Initial episode config
         self.reset_episode()
@@ -76,7 +84,7 @@ class Agent():
         # Get rolling rewards sum
         if self.t_step > self.nstep:
             self.sum_rewards -= reward_to_subtract * self.discounting_oldest_reward
-        self.sum_rewards = GAMMA * self.sum_rewards + reward
+        self.sum_rewards = self.gamma * self.sum_rewards + reward
 
         # Get xv from info
         if self.t_step >= self.nstep:
@@ -106,15 +114,15 @@ class Agent():
             obs (array_like): current observation
             eps (float): epsilon, for epsilon-greedy action selection
         """
+        # Epsilon-greedy: greedy action selection
+        if random.random() < eps:
+            return random.choice(valid_actions).item()
+
         T1 = t1 = time.time()
         state = torch.from_numpy(obs[1]).float().unsqueeze(0).to(device)
         valid_actions = self.get_valid_actions(state)[0]
         t2 = time.time()
-        print('process obs and get valid_actions:', t2-t1)
-
-        # Epsilon-greedy: greedy action selection
-        if random.random() < eps:
-            return random.choice(valid_actions)
+        # print('process obs and get valid_actions:', t2-t1)
 
         t1 = time.time()
         self.qnetwork_local.eval()
@@ -122,13 +130,13 @@ class Agent():
             action_values = {action: self.qnetwork_local(state, action.unsqueeze(0)).cpu().data.numpy() for action in valid_actions}
         self.qnetwork_local.train()
         t2 = time.time()
-        print('compute action_values:', t2-t1)
+        # print('compute action_values:', t2-t1)
 
         t1 = time.time()
         # Epsilon-greedy: max action-value selection
         ret = max(action_values, key=action_values.get)
         T2 = t2 = time.time()
-        print('compute max action-value:', t2-t1)
+        # print('compute max action-value:', t2-t1)
 
         # print('ret', ret, type(ret))
         return ret.item()
@@ -148,47 +156,70 @@ class Agent():
 
         # Compute valid actions
         valid_next_states_actions = self.get_valid_actions(next_states)
-
+        
 #         print('valid_next_states_actions:', valid_next_states_actions)
 
 #         for valid_next_state_actions in valid_next_states_actions:
 #             for valid_next_state_action in valid_next_state_actions:
 #                 print('valid_next_state_action:', valid_next_state_action)
 
-        # Calc Q_targets_next based on current states and valid actions
+
+
+
+
+#         target_preds = self.qnetwork_target(next_states)
+#         disallowed_actions_mask = (next_states[:, 0, :] != self.allowed_action_state)
+#         with torch.no_grad():
+#             q_targets_next = target_preds.masked_fill(disallowed_actions_mask,-10000).max(1, True)[0]
+
+
+
+
+
+        # Calc q_targets_next based on current states and valid actions
         # Default value not important, as dones = 1 in this case and Q_targets_next is ignored
-        # TODO: replace qnetwork_local with qnetwork_target
-        Q_targets_next = torch.tensor([
+        q_targets_next = torch.tensor([
             [max(
-                (self.qnetwork_local(next_state.unsqueeze(0), valid_next_state_action.unsqueeze(0)).detach() for valid_next_state_action in valid_next_state_actions),
+                (self.qnetwork_target(next_state.unsqueeze(0), valid_next_state_action.unsqueeze(0)).detach() for valid_next_state_action in valid_next_state_actions),
                 default=-1
             )] for (next_state, valid_next_state_actions) in zip(next_states, valid_next_states_actions)
-        ])
-        # TODO: assert Q_targets_next.shape = (batch_size, 1)
-        # print('Q_targets_next.shape:', Q_targets_next.shape)
+        ]).to(device)
+        # TODO: assert q_targets_next.shape = (batch_size, 1)
+        # print('q_targets_next.shape:', q_targets_next.shape)
 
-        # Calc Q_targets based on Q_targets_next
-        Q_targets = rewards + GAMMA * Q_targets_next * (1 - dones)
+        # Calc q_targets based on Q_targets_next
+        q_targets = rewards + self.gamma * q_targets_next * (1 - dones)
 
-        # Calc Q_expected based on current states
-        Q_expected = self.qnetwork_local(states, actions)
+        # Calc q_expected based on current states
+        q_expected = self.qnetwork_local(states, actions)
 
         # Calc loss
-        loss = F.mse_loss(Q_expected, Q_targets)        
+        loss = F.mse_loss(q_expected, q_targets)
 
+#         print('Q_hat:', Q_hat)
+#         print('Q_targets:', Q_targets)
+        
         # Run optimizer step
         self.optimizer.zero_grad()
+        # print("theta1 grad:", self.qnetwork_local.theta1.grad)
+        self.losses.append(loss.item())
         loss.backward()
+        # print("theta1 grad:", self.qnetwork_local.theta1.grad)
+        # Gradient clipping to avoid exploding gradient
+        torch.nn.utils.clip_grad_norm_(self.qnetwork_local.parameters(), self.clip_grad_norm_value)
         self.optimizer.step()
 
         # ------------------- update target network ------------------- #
-        self.soft_update(self.qnetwork_local, self.qnetwork_target, TAU)     
+        self.update_t_step = (self.update_t_step + 1) % UPDATE_TARGET_EACH
+        if self.update_t_step == 0:
+            self.hard_update(self.qnetwork_local, self.qnetwork_target)
+        # self.soft_update(self.qnetwork_local, self.qnetwork_target, TAU)
         
         
 #         # Get max predicted Q values (for next states) from target model
 #         Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(1)
 #         # Compute Q targets for current states 
-#         Q_targets = rewards + (GAMMA * Q_targets_next * (1 - dones))
+#         Q_targets = rewards + (self.gamma * Q_targets_next * (1 - dones))
 
 #         # Get expected Q values from local model
 #         Q_expected = self.qnetwork_local(states).gather(1, actions)
@@ -211,7 +242,7 @@ class Agent():
             tau (float): interpolation parameter 
         """
         for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
-            target_param.data.copy_(tau*local_param.data + (1.0-tau)*target_param.data)
+            target_param.data.copy_(tau * local_param.data + (1.0 - tau) * target_param.data)
 
     def hard_update(self, local_model, target_model):
         """Hard update model parameters.
@@ -221,5 +252,4 @@ class Agent():
             local_model (PyTorch model): weights will be copied from
             target_model (PyTorch model): weights will be copied to
         """
-        for target_param, local_param in zip(target_model.parameters(), local_model.parameters()):
-            target_param.data.copy_(local_param.data)
+        target_model.load_state_dict(local_model.state_dict())
