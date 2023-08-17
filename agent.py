@@ -23,8 +23,8 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 class Agent():
     """Interacts with and learns from the environment."""
 
-    def __init__(self, nstep, embed_dim=64, T=4, seed=None, gamma=GAMMA,
-                 clip_grad_norm_value=CLIP_GRAD_NORM_VALUE):
+    def __init__(self, nstep=1, embed_dim=64, T=4, n_node_features=4, n_edge_features=1,
+                 gamma=GAMMA, clip_grad_norm_value=CLIP_GRAD_NORM_VALUE):
         """Initialize an Agent object.
         
         Params
@@ -34,22 +34,24 @@ class Agent():
             seed (int): random seed
         """
         self.nstep = nstep
-        if seed is not None:
-            random.seed(seed)
 
         self.gamma = gamma
         self.clip_grad_norm_value = clip_grad_norm_value
         
         # Q-Network
-        self.qnetwork_local = QNetwork(embed_dim, T, seed).to(device)
-        self.qnetwork_target = QNetwork(embed_dim, T, seed).to(device)
+        self.n_node_features = n_node_features
+        self.n_edge_features = n_edge_features
+        self.qnetwork_local = MPNN(embed_dim=embed_dim, T=T, n_node_features=n_node_features,
+                                   n_edge_features=n_edge_features).to(device, dtype=torch.float32)
+        self.qnetwork_target = MPNN(embed_dim=embed_dim, T=T, n_node_features=n_node_features,
+                                   n_edge_features=n_edge_features).to(device, dtype=torch.float32)
         self.hard_update(self.qnetwork_local, self.qnetwork_target)
         self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=LR)
         self.losses = []
         self.update_t_step = 0
 
         # Replay memory
-        self.memory = ReplayBuffer(BUFFER_SIZE, BATCH_SIZE, seed)
+        self.memory = ReplayBuffer(BUFFER_SIZE, BATCH_SIZE)
 
         # To be used in n-step learning
         self.discounting_oldest_reward = self.gamma**(self.nstep-1)
@@ -64,10 +66,7 @@ class Agent():
         self.rewards = deque(maxlen=self.nstep)
         self.sum_rewards = 0
         # TODO: check if clear_buffer is needed
-        self.memory.clear_buffer()
-        if G is not None:
-            self.qnetwork_local.update_model_info(G)
-            self.qnetwork_target.update_model_info(G)
+        # self.memory.clear_buffer()
 
     def step(self, state, action, reward, next_state, done):
         self.t_step += 1
@@ -106,40 +105,52 @@ class Agent():
 #         (s1, a1, r1 + r2, s3)
 #         (s1, a1, r(s1,a1)+r(s2,a2), s3)
 
+    @torch.no_grad()
     def act(self, obs, eps=0.):
         """Returns actions for given state as per current policy.
 
         Params
         ======
-            obs (array_like): current observation
+            obs        : current observation
             eps (float): epsilon, for epsilon-greedy action selection
         """
+        obs = torch.from_numpy(obs).to(device, dtype=torch.float32)
+        xv = obs[:, 0]
+        valid_actions = (xv == 0).nonzero()
         # Epsilon-greedy: greedy action selection
         if random.random() < eps:
-            return random.choice(valid_actions).item()
+            action_idx = np.random.randint(len(valid_actions))
+            action = valid_actions[action_idx].item()
+            return action
 
-        T1 = t1 = time.time()
-        state = torch.from_numpy(obs[1]).float().unsqueeze(0).to(device)
-        valid_actions = self.get_valid_actions(state)[0]
-        t2 = time.time()
-        # print('process obs and get valid_actions:', t2-t1)
+#         breakpoint()
+        action_values = self.qnetwork_local(obs)
+        action = valid_actions[action_values[valid_actions].argmax().item()].item()
+        return action
 
-        t1 = time.time()
-        self.qnetwork_local.eval()
-        with torch.no_grad():
-            action_values = {action: self.qnetwork_local(state, action.unsqueeze(0)).cpu().data.numpy() for action in valid_actions}
-        self.qnetwork_local.train()
-        t2 = time.time()
-        # print('compute action_values:', t2-t1)
 
-        t1 = time.time()
-        # Epsilon-greedy: max action-value selection
-        ret = max(action_values, key=action_values.get)
-        T2 = t2 = time.time()
-        # print('compute max action-value:', t2-t1)
+#         T1 = t1 = time.time()
+#         state = torch.from_numpy(obs[1]).float().unsqueeze(0).to(device, dtype=torch.float32)
+#         valid_actions = self.get_valid_actions(state)[0]
+#         t2 = time.time()
+#         # print('process obs and get valid_actions:', t2-t1)
 
-        # print('ret', ret, type(ret))
-        return ret.item()
+#         t1 = time.time()
+#         self.qnetwork_local.eval()
+#         with torch.no_grad():
+#             action_values = {action: self.qnetwork_local(state, action.unsqueeze(0)).cpu().data.numpy() for action in valid_actions}
+#         self.qnetwork_local.train()
+#         t2 = time.time()
+#         # print('compute action_values:', t2-t1)
+
+#         t1 = time.time()
+#         # Epsilon-greedy: max action-value selection
+#         ret = max(action_values, key=action_values.get)
+#         T2 = t2 = time.time()
+#         # print('compute max action-value:', t2-t1)
+
+#         # print('ret', ret, type(ret))
+#         return ret.item()
 
     def get_valid_actions(self, states):
         actions = [torch.nonzero(state==0).view(-1) for state in states]
@@ -154,51 +165,22 @@ class Agent():
         """
         states, actions, rewards, next_states, dones = experiences
 
-        # Compute valid actions
-        valid_next_states_actions = self.get_valid_actions(next_states)
+        target_preds = self.qnetwork_target(next_states.float())
+        invalid_actions_mask = (next_states[:, :, 0] == 1)
         
-#         print('valid_next_states_actions:', valid_next_states_actions)
+        # Calculate q_targets_next for valid actions
+        with torch.no_grad():
+            q_targets_next = target_preds.masked_fill(invalid_actions_mask, -10000).max(1, True)[0]
 
-#         for valid_next_state_actions in valid_next_states_actions:
-#             for valid_next_state_action in valid_next_state_actions:
-#                 print('valid_next_state_action:', valid_next_state_action)
-
-
-
-
-
-#         target_preds = self.qnetwork_target(next_states)
-#         disallowed_actions_mask = (next_states[:, 0, :] != self.allowed_action_state)
-#         with torch.no_grad():
-#             q_targets_next = target_preds.masked_fill(disallowed_actions_mask,-10000).max(1, True)[0]
-
-
-
-
-
-        # Calc q_targets_next based on current states and valid actions
-        # Default value not important, as dones = 1 in this case and Q_targets_next is ignored
-        q_targets_next = torch.tensor([
-            [max(
-                (self.qnetwork_target(next_state.unsqueeze(0), valid_next_state_action.unsqueeze(0)).detach() for valid_next_state_action in valid_next_state_actions),
-                default=-1
-            )] for (next_state, valid_next_state_actions) in zip(next_states, valid_next_states_actions)
-        ]).to(device)
-        # TODO: assert q_targets_next.shape = (batch_size, 1)
-        # print('q_targets_next.shape:', q_targets_next.shape)
+        # Calculate Q value
+        q_expected = self.qnetwork_local(states.float()).gather(1, actions)
 
         # Calc q_targets based on Q_targets_next
         q_targets = rewards + self.gamma * q_targets_next * (1 - dones)
 
-        # Calc q_expected based on current states
-        q_expected = self.qnetwork_local(states, actions)
-
         # Calc loss
         loss = F.mse_loss(q_expected, q_targets)
 
-#         print('Q_hat:', Q_hat)
-#         print('Q_targets:', Q_targets)
-        
         # Run optimizer step
         self.optimizer.zero_grad()
         # print("theta1 grad:", self.qnetwork_local.theta1.grad)
@@ -206,7 +188,8 @@ class Agent():
         loss.backward()
         # print("theta1 grad:", self.qnetwork_local.theta1.grad)
         # Gradient clipping to avoid exploding gradient
-        torch.nn.utils.clip_grad_norm_(self.qnetwork_local.parameters(), self.clip_grad_norm_value)
+        if self.clip_grad_norm_value is not None:
+            torch.nn.utils.clip_grad_norm_(self.qnetwork_local.parameters(), self.clip_grad_norm_value)
         self.optimizer.step()
 
         # ------------------- update target network ------------------- #
@@ -214,22 +197,7 @@ class Agent():
         if self.update_t_step == 0:
             self.hard_update(self.qnetwork_local, self.qnetwork_target)
         # self.soft_update(self.qnetwork_local, self.qnetwork_target, TAU)
-        
-        
-#         # Get max predicted Q values (for next states) from target model
-#         Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(1)
-#         # Compute Q targets for current states 
-#         Q_targets = rewards + (self.gamma * Q_targets_next * (1 - dones))
 
-#         # Get expected Q values from local model
-#         Q_expected = self.qnetwork_local(states).gather(1, actions)
-
-#         # Compute loss
-#         loss = F.mse_loss(Q_expected, Q_targets)
-#         # Minimize the loss
-#         self.optimizer.zero_grad()
-#         loss.backward()
-#         self.optimizer.step()
 
     def soft_update(self, local_model, target_model, tau):
         """Soft update model parameters.

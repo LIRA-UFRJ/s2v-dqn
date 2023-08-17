@@ -10,7 +10,7 @@ Experience = namedtuple("Experience", field_names=["state", "action", "reward", 
 class ReplayBuffer:
     """Fixed-size buffer to store experience tuples."""
 
-    def __init__(self, buffer_size, batch_size, seed):
+    def __init__(self, buffer_size, batch_size):
         """Initialize a ReplayBuffer object.
 
         Params
@@ -22,8 +22,6 @@ class ReplayBuffer:
         self.buffer_size = buffer_size
         self.memory = deque(maxlen=buffer_size)
         self.batch_size = batch_size
-        if seed:
-            random.seed(seed)
     
     def clear_buffer(self):
         self.memory = deque(maxlen=self.buffer_size)

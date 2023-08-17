@@ -66,7 +66,10 @@ class TSPEnv():
         """
         An observation is a tuple with shape (n_vertices, n_node_features + 2 * n_vertices)
         where each vertex entry is composed of:
-            - node features (coordinates, 0/1 if contained in current solution, 0/1 if final path node)
+            - node features:
+                - 0/1 if contained in current solution
+                - 0/1 if final path node
+                - coordinates
             - adjacency matrix
             - edge features (currently only edge weight)
         """        
@@ -74,7 +77,7 @@ class TSPEnv():
         last = np.zeros((self.n, 1))
         last[self.tour[-1]] = 1
         
-        ret = np.concatenate([self.nodes_pos, self.xv, last, self.graph_adj_matrix, self.graph_weights], axis=-1)
+        ret = np.concatenate([self.xv, last, self.nodes_pos, self.graph_adj_matrix, self.graph_weights], axis=-1)
         print(ret.shape)
 
         return ret
