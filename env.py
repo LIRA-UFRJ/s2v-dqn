@@ -53,7 +53,7 @@ class TSPEnv():
 
         self.n = self.G.number_of_nodes()
         self.xv = np.zeros((self.n, 1))
-        self.xv[0] = 1
+        self.xv[0,0] = 1
         self.tour = [0]
         # TODO: delete
         # return (self.tour.copy(), self.xv.copy())
@@ -78,7 +78,6 @@ class TSPEnv():
         last[self.tour[-1]] = 1
         
         ret = np.concatenate([self.xv, last, self.nodes_pos, self.graph_adj_matrix, self.graph_weights], axis=-1)
-        print(ret.shape)
 
         return ret
     
@@ -90,7 +89,8 @@ class TSPEnv():
     def step(self, action: int) -> EnvInfo:
         assert 0 <= action < self.n, f"Vertex {action} should be in the range [0, {self.n-1}]"
         assert (self.xv[action] == 0.0 or (action == self.tour[0] and len(self.tour) == self.n)), f"Vertex {action} already visited"
-        # Get reward
+
+        # Collect reward
         reward = self.get_reward(action)
         
         # Compute new state
@@ -98,9 +98,9 @@ class TSPEnv():
         self.tour.append(action)
         next_state = self.tour
         
-        # Check if done. Should start at some vertex, 
+        # Done if tour contains all vertices and returns to first tour vertex
         done = len(self.tour) == self.n + 1
         
         # Return all info for step
-        env_info = EnvInfo((next_state.copy(), self.xv.copy()), reward, done)
+        env_info = EnvInfo(self.get_observation(), reward, done)
         return env_info

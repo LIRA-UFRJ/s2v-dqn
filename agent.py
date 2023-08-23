@@ -72,7 +72,7 @@ class Agent():
         self.t_step += 1
         reward_to_subtract = self.rewards[0] if self.t_step > self.nstep else 0 # r1
 
-        self.states.append(state[1].copy())
+        self.states.append(state)
         self.actions.append(action)
         self.rewards.append(reward)
 
@@ -88,7 +88,7 @@ class Agent():
         # Get xv from info
         if self.t_step >= self.nstep:
             # Save experience in replay memory
-            self.memory.add(oldest_state, oldest_action, self.sum_rewards, next_state[1].copy(), done)
+            self.memory.add(oldest_state, oldest_action, self.sum_rewards, next_state, done)
             experiences = self.memory.sample()
             self.learn(experiences)
             
@@ -117,40 +117,21 @@ class Agent():
         obs = torch.from_numpy(obs).to(device, dtype=torch.float32)
         xv = obs[:, 0]
         valid_actions = (xv == 0).nonzero()
+        
+        # IMPORTANT: This should be the first vertex in the tour
+        if len(valid_actions) == 0:
+            return 0
+
         # Epsilon-greedy: greedy action selection
         if random.random() < eps:
             action_idx = np.random.randint(len(valid_actions))
             action = valid_actions[action_idx].item()
             return action
 
-#         breakpoint()
-        action_values = self.qnetwork_local(obs)
-        action = valid_actions[action_values[valid_actions].argmax().item()].item()
+        action_values = self.qnetwork_local(obs).squeeze(0) # squeeze to remove NN batching
+        valid_actions_idx = action_values[valid_actions].argmax().item()
+        action = valid_actions[valid_actions_idx].item()
         return action
-
-
-#         T1 = t1 = time.time()
-#         state = torch.from_numpy(obs[1]).float().unsqueeze(0).to(device, dtype=torch.float32)
-#         valid_actions = self.get_valid_actions(state)[0]
-#         t2 = time.time()
-#         # print('process obs and get valid_actions:', t2-t1)
-
-#         t1 = time.time()
-#         self.qnetwork_local.eval()
-#         with torch.no_grad():
-#             action_values = {action: self.qnetwork_local(state, action.unsqueeze(0)).cpu().data.numpy() for action in valid_actions}
-#         self.qnetwork_local.train()
-#         t2 = time.time()
-#         # print('compute action_values:', t2-t1)
-
-#         t1 = time.time()
-#         # Epsilon-greedy: max action-value selection
-#         ret = max(action_values, key=action_values.get)
-#         T2 = t2 = time.time()
-#         # print('compute max action-value:', t2-t1)
-
-#         # print('ret', ret, type(ret))
-#         return ret.item()
 
     def get_valid_actions(self, states):
         actions = [torch.nonzero(state==0).view(-1) for state in states]
@@ -164,8 +145,8 @@ class Agent():
             experiences (Tuple[torch.Variable]): tuple of (s, a, r, s', done) tuples 
         """
         states, actions, rewards, next_states, dones = experiences
-
-        target_preds = self.qnetwork_target(next_states.float())
+        
+        target_preds = self.qnetwork_target(next_states)
         invalid_actions_mask = (next_states[:, :, 0] == 1)
         
         # Calculate q_targets_next for valid actions
@@ -173,7 +154,7 @@ class Agent():
             q_targets_next = target_preds.masked_fill(invalid_actions_mask, -10000).max(1, True)[0]
 
         # Calculate Q value
-        q_expected = self.qnetwork_local(states.float()).gather(1, actions)
+        q_expected = self.qnetwork_local(states).gather(1, actions)
 
         # Calc q_targets based on Q_targets_next
         q_targets = rewards + self.gamma * q_targets_next * (1 - dones)

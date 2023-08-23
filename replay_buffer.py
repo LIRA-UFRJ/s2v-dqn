@@ -35,14 +35,14 @@ class ReplayBuffer:
         """Randomly sample a batch of experiences from memory."""
         sample_size = min(self.batch_size, len(self.memory))
         experiences = random.sample(self.memory, k=sample_size)
-        
-        # TODO: check torch.from_numpy when states from multiple episodes are present
-        # states = torch.from_numpy(np.vstack([e.state for e in experiences if e is not None])).float().to(device)
-        states = [torch.from_numpy(e.state).float().to(device) for e in experiences if e is not None]
+
+        # stack for single-valued (0-dimensional) elements and vstack for n-dimensional elements
+        states = torch.from_numpy(np.stack([e.state for e in experiences if e is not None])).float().to(device)
+#         states = [torch.from_numpy(e.state).float().to(device) for e in experiences if e is not None]
         actions = torch.from_numpy(np.vstack([e.action for e in experiences if e is not None])).long().to(device)
         rewards = torch.from_numpy(np.vstack([e.reward for e in experiences if e is not None])).float().to(device)
-        # next_states = torch.from_numpy(np.vstack([e.next_state for e in experiences if e is not None])).float().to(device)
-        next_states = [torch.from_numpy(e.next_state).float().to(device) for e in experiences if e is not None]
+        next_states = torch.from_numpy(np.stack([e.next_state for e in experiences if e is not None])).float().to(device)
+#         next_states = [torch.from_numpy(e.next_state).float().to(device) for e in experiences if e is not None]
         dones = torch.from_numpy(np.vstack([e.done for e in experiences if e is not None]).astype(np.uint8)).float().to(device)
   
         return (states, actions, rewards, next_states, dones)
