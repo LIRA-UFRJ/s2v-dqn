@@ -1,0 +1,31 @@
+TODO:
+
+x graph knn
+x node features + adj matrix
+    x env
+    x model
+x dqn vectorized
+x model vectorized
+x edge features
+x layer parameters
+x don't clear replay buffer on env.reset()
+- one replay buffer per graph size
+- hyperparameters from appendix
+    - learning rate exponential decay
+    - epsilon linear decay
+- episodes = #minibatches / #avg vertices per episode
+- (normalize sums) try replacing sum with avg in TSP model when computing graph embedding
+- generate graphs from same distribution from paper
+
+x negate reward
+x fix run on GPU
+x implement nstep
+x represent state properly
+x implement agent.learn
+x test act
+x test learn
+x implement training loop
+x test step
+x implement validation with exact solution, calc'd by DP TSP
+x target network (?) with hard/soft update
+- revisit docstrings

@@ -49,6 +49,9 @@ class MPNN(nn.Module):
         return q_hat
 
 class EmbeddingLayer(nn.Module):
+    '''
+    Calculate embeddings for all vertices
+    '''
     def __init__(self, embed_dim, n_node_features, n_edge_features=1, bias=False):
         super().__init__()
         self.theta1 = nn.Linear(n_node_features, embed_dim, bias=bias)
@@ -59,10 +62,7 @@ class EmbeddingLayer(nn.Module):
     def forward(self, prev_embeddings, adj, node_features, edge_features):
         # node_features.shape = (batch_size, n_vertices, n_node_features)
         # x1.shape = (batch_size, n_vertices, embed_dim)
-        try:
-            x1 = self.theta1(node_features)
-        except:
-            breakpoint()
+        x1 = self.theta1(node_features)
 
         # adj.shape = (batch_size, n_vertices, n_vertices)
         # prev_embeddings.shape = (batch_size, n_vertices, embed_dim)
@@ -79,12 +79,7 @@ class EmbeddingLayer(nn.Module):
         # x4.shape = (batch_size, n_vertices, n_vertices, embed_dim)
         # sum_neighbor_edge_embeddings.shape = (batch_size, n_vertices, embed_dim)
         # x3.shape = (batch_size, n_vertices, embed_dim)
-        
-        
-        try:
-            sum_neighbor_edge_embeddings = (adj.unsqueeze(-1) * x4).sum(dim=2)
-        except:
-            breakpoint()
+        sum_neighbor_edge_embeddings = (adj.unsqueeze(-1) * x4).sum(dim=2)
         
         x3 = self.theta3(sum_neighbor_edge_embeddings)
 

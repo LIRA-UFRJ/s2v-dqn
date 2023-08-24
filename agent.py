@@ -164,10 +164,9 @@ class Agent():
 
         # Run optimizer step
         self.optimizer.zero_grad()
-        # print("theta1 grad:", self.qnetwork_local.theta1.grad)
         self.losses.append(loss.item())
         loss.backward()
-        # print("theta1 grad:", self.qnetwork_local.theta1.grad)
+        # print("theta1 grad:", self.qnetwork_local.embedding_layer.theta1.weight.grad)
         # Gradient clipping to avoid exploding gradient
         if self.clip_grad_norm_value is not None:
             torch.nn.utils.clip_grad_norm_(self.qnetwork_local.parameters(), self.clip_grad_norm_value)
