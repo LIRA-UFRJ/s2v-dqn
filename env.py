@@ -23,6 +23,7 @@ def graph_generator(n_min, n_max, k_nearest=None, seed=None) -> nx.Graph:
     if k_nearest is not None:
         edges_to_remove = [(u,v) for u, v in G.edges if G[u][v]["closest"] > k_nearest]
         G.remove_edges_from(edges_to_remove)
+
     return G
 
 class TSPEnv():
@@ -33,18 +34,21 @@ class TSPEnv():
         k_nearest: Optional[int] = None,
         graph_generator: Callable[[int, int, Optional[int], Optional[int]], nx.Graph] = graph_generator,
         negate_reward: bool = False,
+        cycle: bool = True, 
         **kwargs
     ) -> None:
         self.n_min = n_min
         self.n_max = n_max
         self.graph_generator = graph_generator
         self.negate_reward = negate_reward
+        self.start_vertex = 0
+        self.cycle = cycle
         # TODO: remove this once training converges for single graph
-        self.G = self.graph_generator(n_min=self.n_min, n_max=self.n_max, k_nearest=k_nearest)
+        # self.G = self.graph_generator(n_min=self.n_min, n_max=self.n_max, k_nearest=k_nearest)
         self.reset()
 
     def reset(self):
-        # self.G = self.graph_generator(n_min=self.n_min, n_max=self.n_max)
+        self.G = self.graph_generator(n_min=self.n_min, n_max=self.n_max)
 
         # precompute some node features
         self.nodes_pos = np.array([self.G.nodes[u]["pos"] for u in self.G.nodes])
@@ -53,8 +57,8 @@ class TSPEnv():
 
         self.n = self.G.number_of_nodes()
         self.xv = np.zeros((self.n, 1))
-        self.xv[0,0] = 1
-        self.tour = [0]
+        self.xv[self.start_vertex, 0] = 1
+        self.tour = [self.start_vertex]
         # TODO: delete
         # return (self.tour.copy(), self.xv.copy())
         return self.get_observation()
@@ -82,8 +86,12 @@ class TSPEnv():
         return ret
     
     def get_reward(self, action):
+        def get_weight(u, v):
+            return -self.G[u][v]["weight"] if v in self.G[u] and "weight" in self.G[u][v] else -float("inf")
         u, v = self.tour[-1], action
-        reward = -self.G[u][v]["weight"] if v in self.G[u] and "weight" in self.G[u][v] else -float("inf")
+        reward = get_weight(u, v)
+        if len(self.tour) + 1 == self.n and self.cycle:
+            reward += get_weight(v, self.start_vertex)
         return -reward if self.negate_reward else reward
     
     def step(self, action: int) -> EnvInfo:
@@ -94,13 +102,20 @@ class TSPEnv():
         reward = self.get_reward(action)
         
         # Compute new state
+        # print(f'[env] {self.xv=}')
+        # print(f'[env] {action=}')
         self.xv[action] = 1.0
+        # print(f'[env] {self.xv=}')
         self.tour.append(action)
         next_state = self.tour
         
         # Done if tour contains all vertices and returns to first tour vertex
-        done = len(self.tour) == self.n + 1
+        done = len(self.tour) == self.n
         
         # Return all info for step
         env_info = EnvInfo(self.get_observation(), reward, done)
         return env_info
+
+#     def final_step(self):
+#         reward = self.get_reward(self.start_vertex)
+        

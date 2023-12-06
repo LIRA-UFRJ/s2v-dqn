@@ -10,6 +10,7 @@ import random
 from typing import Tuple
 
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import networkx as nx
 import numpy as np
 from networkx.algorithms.approximation.traveling_salesman import (
@@ -48,12 +49,13 @@ def make_complete_planar_graph(N, seed: int = None) -> nx.Graph:
     return G
 
 
-def plot_network(G, path: list = None, draw_all_edges=True) -> Tuple[any, any]:
+def plot_network(G, *paths, draw_all_edges=True) -> Tuple[any, any]:
     """Plots the network and a path if specified.
 
     Args:
         G: networkx graph.
         path: List of node indexes in a path. Defaults to None.
+        solution: List of node indexes in a solution path. Defaults to None.
 
     Returns:
         (fig, ax) from plt.subplots
@@ -61,35 +63,35 @@ def plot_network(G, path: list = None, draw_all_edges=True) -> Tuple[any, any]:
 
     fig, ax = plt.subplots()
 
-    # Use pos attribute if it exists
-    if "pos" not in G.nodes[0]:
-        pos = nx.spring_layout(
-            G, seed=7
-        )  # positions for all nodes - seed for reproducibility
-    else:
-        pos = [G.nodes[n]["pos"] for n in G.nodes]
+    # Use pos attribute
+    pos = [G.nodes[n]["pos"] for n in G.nodes]
 
-    if not path:
+    if not paths:
         _ = nx.draw_networkx_nodes(G, pos, node_size=200)
 
     else:
         _ = nx.draw_networkx_nodes(G, pos, node_size=200, node_color="#808080")
+        all_nodes = set()
+        for path in paths:
+            for u in path:
+                all_nodes.add(u)
         _ = nx.draw_networkx_nodes(
-            G.subgraph(list(set(path))),
+            G.subgraph(list(all_nodes)),
             pos,
             node_size=200,
         )
 
     _ = nx.draw_networkx_labels(G, pos, font_size=12, font_color="white")
 
-    if path is None and draw_all_edges:
+    if paths is None and draw_all_edges:
         _ = nx.draw_networkx_edges(G, pos, edgelist=list(G.edges), width=1)
     else:
         if draw_all_edges:
             _ = nx.draw_networkx_edges(G, pos, edgelist=list(G.edges), width=0.1)
-
-        edgelist = [(path[i + 1], path[i]) for i in range(len(path) - 1)]
-        _ = nx.draw_networkx_edges(G, pos, edgelist=edgelist, width=1)
+        for path_idx, path in enumerate(paths):
+            edgelist = [(path[i], path[i + 1]) for i in range(len(path) - 1)]
+            color_list = ['black', 'red']
+            _ = nx.draw_networkx_edges(G, pos, edgelist=edgelist, width=1, edge_color=color_list[path_idx % len(color_list)])
 
     return fig, ax
 
