@@ -20,7 +20,7 @@ from networkx.algorithms.approximation.traveling_salesman import (
 from scipy.spatial import distance_matrix
 
 
-def make_complete_planar_graph(N, seed: int = None) -> nx.Graph:
+def make_complete_planar_graph(N, seed: int = None, pos_lim: float = 1e3) -> nx.Graph:
     """Returns a fully connected graph with xy positions for each
     node and edge weights equal to pairwise distances.
 
@@ -37,7 +37,7 @@ def make_complete_planar_graph(N, seed: int = None) -> nx.Graph:
     # Complete graph on points in xy-plane with pairwise distances as edge weights
     G = nx.complete_graph(N)
 
-    pos = np.random.rand(N, 2)
+    pos = np.random.rand(N, 2) * pos_lim
     d = distance_matrix(pos, pos)
 
     for ei, ej in G.edges:

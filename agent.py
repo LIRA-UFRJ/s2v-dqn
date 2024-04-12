@@ -10,8 +10,10 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 
+import pdb
+
 BUFFER_SIZE = int(1e5)   # replay buffer size
-BATCH_SIZE = 16          # minibatch size
+BATCH_SIZE = 64          # minibatch size
 GAMMA = 0.10             # discount factor
 TAU = 1e-3               # for soft update of target parameters
 LR = 1e-4                # learning rate
@@ -25,9 +27,9 @@ class Agent():
     """Interacts with and learns from the environment."""
 
     def __init__(self, nstep=1, embed_dim=64, T=4, n_node_features=4, n_edge_features=1,
-                 normalize=False, buffer_size=BUFFER_SIZE, batch_size=BATCH_SIZE,
+                 normalize=True, buffer_size=BUFFER_SIZE, batch_size=BATCH_SIZE,
                  gamma=GAMMA, tau=TAU, lr=LR, clip_grad_norm_value=CLIP_GRAD_NORM_VALUE,
-                 update_target_each=UPDATE_TARGET_EACH, target_update="soft"):
+                 update_target_each=UPDATE_TARGET_EACH, target_update="hard"):
         """Initialize an Agent object.
         
         Params
@@ -52,6 +54,15 @@ class Agent():
                                    n_edge_features=n_edge_features, normalize=normalize).to(device, dtype=torch.float32)
         self.qnetwork_target = MPNN(embed_dim=embed_dim, T=T, n_node_features=n_node_features,
                                    n_edge_features=n_edge_features, normalize=normalize).to(device, dtype=torch.float32)
+        
+        # torch.nn.init.xavier_normal_(self.qnetwork_local.embedding_layer.theta1.weight)
+        # torch.nn.init.xavier_normal_(self.qnetwork_local.embedding_layer.theta2.weight)
+        # torch.nn.init.xavier_normal_(self.qnetwork_local.embedding_layer.theta3.weight)
+        # torch.nn.init.xavier_normal_(self.qnetwork_local.embedding_layer.theta4.weight)
+        # torch.nn.init.xavier_normal_(self.qnetwork_local.q_layer.theta5.weight)
+        # torch.nn.init.xavier_normal_(self.qnetwork_local.q_layer.theta6.weight)
+        # torch.nn.init.xavier_normal_(self.qnetwork_local.q_layer.theta7.weight)
+        
         self.hard_update(self.qnetwork_local, self.qnetwork_target)
         self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=lr)
         
@@ -186,7 +197,7 @@ class Agent():
 
         # Calc loss
         loss = F.mse_loss(q_expected, q_targets)
-        if loss.item() > 1e4:
+        if loss.item() > 5e15:
             print(f'actions: {list(actions.detach().numpy().flatten())}')
             print(f'q_expected: {list(q_expected.detach().numpy().flatten())}')
             print(f'q_targets: {list(q_targets.detach().numpy().flatten())}')
@@ -206,7 +217,7 @@ class Agent():
         self.theta1s.append(self.qnetwork_local.embedding_layer.theta1.weight[0,0].item())
         self.theta2s.append(self.qnetwork_local.embedding_layer.theta2.weight[0,0].item())
         self.theta3s.append(self.qnetwork_local.embedding_layer.theta3.weight[0,0].item())
-        self.theta4s.append(self.qnetwork_local.embedding_layer.theta4.weight[0,0].item())
+        # self.theta4s.append(self.qnetwork_local.embedding_layer.theta4.weight[0,0].item())
         self.theta5s.append(self.qnetwork_local.q_layer.theta5.weight[0,0].item())
         self.theta6s.append(self.qnetwork_local.q_layer.theta6.weight[0,0].item())
         self.theta7s.append(self.qnetwork_local.q_layer.theta7.weight[0,0].item())

@@ -10,8 +10,8 @@ K_CLOSEST = 10
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class MPNN(nn.Module):
-    def __init__(self, embed_dim=64, T=4, n_node_features=4,
-                 n_edge_features=1, bias=False, normalize=False):
+    def __init__(self, embed_dim=64, T=4, n_node_features=4, n_edge_features=1,
+                 bias=False, normalize=False, batch_norm=False):
         super().__init__()
 
         self.T = T
@@ -19,6 +19,10 @@ class MPNN(nn.Module):
         self.n_node_features = n_node_features
         self.n_edge_features = n_edge_features
         
+        # Currently not working correctly
+        self.batch_norm = batch_norm
+        
+        self.batch_norm_embedding = nn.BatchNorm1d(n_node_features)
         self.embedding_layer = EmbeddingLayer(
             embed_dim=embed_dim,
             n_node_features=n_node_features,
@@ -26,6 +30,8 @@ class MPNN(nn.Module):
             bias=bias,
             normalize=normalize
         )
+
+        self.batch_norm_q = nn.BatchNorm1d(embed_dim)
         self.q_layer = QNetwork(embed_dim=embed_dim, bias=bias, normalize=normalize)
     
     def forward(self, state):
@@ -35,15 +41,21 @@ class MPNN(nn.Module):
         if state.dim() == 2:
             state = state.unsqueeze(0)
 
+        if self.batch_norm:
+            state = self.batch_norm_embedding(state)
+            
         n = state.shape[1]
         node_features = state[:, :, :self.n_node_features]
         adj = state[:, :, self.n_node_features:(self.n_node_features + n)]
         edge_features = state[:, :, (self.n_node_features + n):]
-        
+
         # calculate node embeddings
-        embeddings = torch.zeros(state.shape[0], state.shape[1], self.embed_dim).to(device, dtype=torch.float32)
+        embeddings = torch.zeros(state.shape[0], state.shape[1], self.embed_dim, requires_grad=True).to(device, dtype=torch.float32)
         for _ in range(self.T):
             embeddings = self.embedding_layer(embeddings, adj, node_features, edge_features)
+
+        if self.batch_norm:
+            state = self.batch_norm_layer(state)
 
         # calculate \hat{Q} based on embeddings and given vertices
         q_hat = self.q_layer(embeddings)
@@ -71,29 +83,33 @@ class EmbeddingLayer(nn.Module):
         # x2.shape = (batch_size, n_vertices, embed_dim)
         x2 = self.theta2(torch.matmul(adj, prev_embeddings))
 
-        # edge_features.shape = (batch_size, n_vertices, n_vertices, n_edge_features)
-        # x4.shape = (batch_size, n_vertices, n_vertices, embed_dim)
-        if edge_features.dim() == 3:
-            edge_features = edge_features.unsqueeze(-1)
-        # x4 = F.relu(self.theta4(edge_features))
-        x4 = nn.LeakyReLU()(self.theta4(edge_features))
-        
-        # adj.shape = (batch_size, n_vertices, n_vertices)
-        # x4.shape = (batch_size, n_vertices, n_vertices, embed_dim)
-        # sum_neighbor_edge_embeddings.shape = (batch_size, n_vertices, embed_dim)
-        # x3.shape = (batch_size, n_vertices, embed_dim)
-        sum_neighbor_edge_embeddings = (adj.unsqueeze(-1) * x4).sum(dim=2)
-        if self.normalize:
-            norm = adj.sum(dim=2).unsqueeze(-1)
-            norm[norm == 0] = 1
-            sum_neighbor_edge_embeddings = sum_neighbor_edge_embeddings / norm
-        
-        x3 = self.theta3(sum_neighbor_edge_embeddings)
+        n_edge_features = edge_features.shape[2]
+        if n_edge_features > 0:
+            # edge_features.shape = (batch_size, n_vertices, n_vertices, n_edge_features)
+            # x4.shape = (batch_size, n_vertices, n_vertices, embed_dim)
+            if edge_features.dim() == 3:
+                edge_features = edge_features.unsqueeze(-1)
+            # x4 = F.relu(self.theta4(edge_features))
+            x4 = nn.LeakyReLU()(self.theta4(edge_features))
+
+            # adj.shape = (batch_size, n_vertices, n_vertices)
+            # x4.shape = (batch_size, n_vertices, n_vertices, embed_dim)
+            # sum_neighbor_edge_embeddings.shape = (batch_size, n_vertices, embed_dim)
+            # x3.shape = (batch_size, n_vertices, embed_dim)
+            sum_neighbor_edge_embeddings = (adj.unsqueeze(-1) * x4).sum(dim=2)
+            if self.normalize:
+                norm = adj.sum(dim=2).unsqueeze(-1)
+                norm[norm == 0] = 1
+                sum_neighbor_edge_embeddings = sum_neighbor_edge_embeddings / norm
+
+            x3 = self.theta3(sum_neighbor_edge_embeddings)
+
+            ret = nn.LeakyReLU()(x1 + x2 + x3)
+        else:
+            ret = nn.LeakyReLU()(x1 + x2)
 
         # ret.shape = (batch_size, n_vertices, embed_dim)
-        # ret = F.relu(x1 + x2 + x3)
-        ret = nn.LeakyReLU()(x1 + x2 + x3)
-
+        # ret = F.relu(x1 + x2 [+ x3])
         return ret
 
 class QNetwork(nn.Module):

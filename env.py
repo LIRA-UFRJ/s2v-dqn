@@ -8,9 +8,9 @@ from graph_utils import make_complete_planar_graph
 
 EnvInfo = namedtuple("EnvInfo", field_names=["observation", "reward", "done"])
 
-def graph_generator(n_min, n_max, k_nearest=None, seed=None) -> nx.Graph:
+def graph_generator(n_min, n_max, pos_lim, k_nearest=None, seed=None) -> nx.Graph:
     n = np.random.randint(n_min, n_max+1)
-    G = make_complete_planar_graph(N=n, seed=seed).to_directed()
+    G = make_complete_planar_graph(N=n, seed=seed, pos_lim=pos_lim).to_directed()
 
     # add attribute to indicate the closest neighbors of each node
     for u in range(n):
@@ -31,16 +31,22 @@ class TSPEnv():
         self,
         n_min: int = 10,
         n_max: int = 20,
+        pos_lim: float = 1e3,
         k_nearest: Optional[int] = None,
         graph_generator: Callable[[int, int, Optional[int], Optional[int]], nx.Graph] = graph_generator,
         negate_reward: bool = False,
+        normalize_reward: bool = True,
+        normalize_observations: bool = True,
         cycle: bool = True, 
         **kwargs
     ) -> None:
         self.n_min = n_min
         self.n_max = n_max
+        self.pos_lim = pos_lim
         self.graph_generator = graph_generator
         self.negate_reward = negate_reward
+        self.normalize_reward = normalize_reward
+        self.normalize_observations = normalize_observations
         self.start_vertex = 0
         self.cycle = cycle
         # TODO: remove this once training converges for single graph
@@ -48,7 +54,7 @@ class TSPEnv():
         self.reset()
 
     def reset(self):
-        self.G = self.graph_generator(n_min=self.n_min, n_max=self.n_max)
+        self.G = self.graph_generator(n_min=self.n_min, n_max=self.n_max, pos_lim=self.pos_lim)
 
         # precompute some node features
         self.nodes_pos = np.array([self.G.nodes[u]["pos"] for u in self.G.nodes])
@@ -71,18 +77,33 @@ class TSPEnv():
         An observation is a tuple with shape (n_vertices, n_node_features + 2 * n_vertices)
         where each vertex entry is composed of:
             - node features:
-                - 0/1 if contained in current solution
-                - 0/1 if final path node
-                - coordinates
-            - adjacency matrix
-            - edge features (currently only edge weight)
-        """        
+                - 0/1 if contained in current solution   # range [0,1]
+                - 0/1 if final path node                 # range [0,1]
+                - coordinates                            # range [0,1]
+            - adjacency matrix                           # range [0,1]
+            - edge features (currently only edge weight) # range [0, sqrt(2)]
+        """
         # 0/1 if final path node
         last = np.zeros((self.n, 1))
         last[self.tour[-1]] = 1
         
-        ret = np.concatenate([self.xv, last, self.nodes_pos, self.graph_adj_matrix, self.graph_weights], axis=-1)
-
+        if self.normalize_observations:
+            ret = np.concatenate([
+                self.xv,
+                last,
+                self.nodes_pos / self.pos_lim,
+                self.graph_adj_matrix,
+                self.graph_weights / self.pos_lim
+            ], axis=-1)
+        else:
+            ret = np.concatenate([
+                self.xv,
+                last,
+                self.nodes_pos,
+                self.graph_adj_matrix,
+                self.graph_weights
+            ], axis=-1)
+        
         return ret
     
     def get_reward(self, action):
@@ -92,7 +113,11 @@ class TSPEnv():
         reward = get_weight(u, v)
         if len(self.tour) + 1 == self.n and self.cycle:
             reward += get_weight(v, self.start_vertex)
-        return -reward if self.negate_reward else reward
+        
+        reward_signal_adjusted = -reward if self.negate_reward else reward
+        # reward_norm_adjusted = reward_signal_adjusted / self.n if self.normalize_reward else reward_signal_adjusted
+        reward_norm_adjusted = reward_signal_adjusted / self.pos_lim if self.normalize_reward else reward_signal_adjusted
+        return reward_norm_adjusted
     
     def step(self, action: int) -> EnvInfo:
         assert 0 <= action < self.n, f"Vertex {action} should be in the range [0, {self.n-1}]"
@@ -107,7 +132,6 @@ class TSPEnv():
         self.xv[action] = 1.0
         # print(f'[env] {self.xv=}')
         self.tour.append(action)
-        next_state = self.tour
         
         # Done if tour contains all vertices and returns to first tour vertex
         done = len(self.tour) == self.n
@@ -119,3 +143,89 @@ class TSPEnv():
 #     def final_step(self):
 #         reward = self.get_reward(self.start_vertex)
         
+class MVCEnv():
+    ERDOS_RENYI = 1
+    BARABASI_ALBERT = 2
+    DEFAULT_ERDOS_RENYI_PROBABILITY = 0.15
+    DEFAULT_BARABASI_ALBERT_DEGREE = 4
+    
+    def __init__(
+        self,
+        n_min: int = 10,
+        n_max: int = 20,
+        normalize_reward: bool = True,
+        graph_type = BARABASI_ALBERT,
+        **kwargs
+    ) -> None:
+        self.n_min = n_min
+        self.n_max = n_max
+        self.normalize_reward = normalize_reward
+        self.graph_type = graph_type
+        self.start_vertex = 0
+        # TODO: remove this once training converges for single graph
+        # self.G = self.graph_generator(n_min=self.n_min, n_max=self.n_max, k_nearest=k_nearest)
+        self.reset()
+
+    def reset(self):
+        self.G = self.generate_graph(n_min=self.n_min, n_max=self.n_max)
+
+        # precompute some node features
+        self.graph_adj_matrix = nx.to_numpy_array(self.G, weight=None)
+
+        self.n = self.G.number_of_nodes()
+        self.n_edges = self.G.number_of_edges()
+        self.covered_edges = 0
+        self.xv = np.zeros((self.n, 1))
+        return self.get_observation()
+    
+    def generate_graph(self, n_min, n_max):
+        n = np.random.randint(n_min, n_max + 1)
+        if self.graph_type == MVCEnv.ERDOS_RENYI:
+            return nx.erdos_renyi_graph(n, p=getattr(self, "p", self.DEFAULT_ERDOS_RENYI_PROBABILITY))
+        elif self.graph_type == MVCEnv.BARABASI_ALBERT:
+            return nx.barabasi_albert_graph(n, m=getattr(self, "m", self.DEFAULT_BARABASI_ALBERT_DEGREE))
+        raise ValueError("graph_type must be MVCEnv.ERDOS_RENYI or MVCEnv.BARABASI_ALBERT")
+    
+    def get_solution_score(self):
+        return self.xv.sum()
+    
+    def get_observation(self):
+        """
+        An observation is a tuple with shape (n_vertices, n_node_features + 2 * n_vertices)
+        where each vertex entry is composed of:
+            - node features:
+                - 0/1 if contained in current solution   # range [0,1]
+            - adjacency matrix                           # range [0,1]
+        """
+        # 0/1 if final path node
+        ret = np.concatenate([
+            self.xv,
+            self.graph_adj_matrix
+        ], axis=-1)
+
+        return ret
+    
+    def get_reward(self, action):
+        reward = -1
+        reward_norm_adjusted = reward / self.n if self.normalize_reward else reward
+        return reward_norm_adjusted
+    
+    def step(self, action: int) -> EnvInfo:
+        assert 0 <= action < self.n, f"Vertex {action} should be in the range [0, {self.n-1}]"
+        assert self.xv[action] == 0.0, f"Vertex {action} already visited"
+
+        # Collect reward
+        reward = self.get_reward(action)
+        
+        # Compute new state
+        self.xv[action] = 1.0
+        
+        # Covered edges increases by number of neighbors that were not in the solution 
+        self.covered_edges += np.dot(self.graph_adj_matrix[action], 1 - self.xv)
+        
+        # Done if chosen nodes covers all edges
+        done = self.covered_edges == self.n_edges
+        
+        # Return all info for step
+        env_info = EnvInfo(self.get_observation(), reward, done)
+        return env_info
