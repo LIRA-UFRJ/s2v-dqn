@@ -175,7 +175,7 @@ class MVCEnv():
         self.n = self.G.number_of_nodes()
         self.n_edges = self.G.number_of_edges()
         self.covered_edges = 0
-        self.xv = np.zeros((self.n, 1))
+        self.xv = np.zeros(self.n)
         return self.get_observation()
     
     def generate_graph(self, n_min, n_max):
@@ -198,10 +198,15 @@ class MVCEnv():
             - adjacency matrix                           # range [0,1]
         """
         # 0/1 if final path node
-        ret = np.concatenate([
+        ret = np.column_stack([
             self.xv,
-            self.graph_adj_matrix
-        ], axis=-1)
+            self.graph_adj_matrix,
+        ])
+        # TODO: swap dims
+        # ret = np.vstack([
+        #     self.xv,
+        #     self.graph_adj_matrix
+        # ])
 
         return ret
     

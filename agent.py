@@ -14,7 +14,7 @@ import pdb
 
 BUFFER_SIZE = int(1e5)   # replay buffer size
 BATCH_SIZE = 64          # minibatch size
-GAMMA = 0.10             # discount factor
+GAMMA = 1.00             # discount factor
 TAU = 1e-3               # for soft update of target parameters
 LR = 1e-4                # learning rate
 CLIP_GRAD_NORM_VALUE = 5 # value of gradient to clip while training
