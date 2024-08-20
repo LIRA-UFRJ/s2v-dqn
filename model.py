@@ -70,7 +70,7 @@ class EmbeddingLayer(nn.Module):
         self.theta1 = nn.Linear(n_node_features, embed_dim, bias=bias)
         self.theta2 = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.theta3 = nn.Linear(embed_dim, embed_dim, bias=bias)
-        self.theta4 = nn.Linear(n_edge_features, embed_dim, bias=bias)
+        self.theta4 = nn.Linear(max(n_edge_features, 1), embed_dim, bias=bias)
         self.normalize = normalize
         
     def forward(self, prev_embeddings, adj, node_features, edge_features):

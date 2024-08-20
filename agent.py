@@ -38,7 +38,8 @@ class Agent():
             action_size (int): dimension of each action
             seed (int): random seed
         """
-        self.nstep = nstep
+        self.nstep = abs(nstep)
+        self.use_nstep = nstep > 0
 
         self.gamma = gamma
         self.clip_grad_norm_value = clip_grad_norm_value
@@ -101,29 +102,37 @@ class Agent():
         # self.memory.clear_buffer()
 
     def step(self, state, action, reward, next_state, done):
-        self.t_step += 1
-        reward_to_subtract = self.rewards[0] if self.t_step > self.nstep else 0 # r1
-
-        self.states.append(state)
-        self.actions.append(action)
-        self.rewards.append(reward)
-
-        # Get oldest state and action to add to replay memory buffer
-        oldest_state = self.states[0] # s2
-        oldest_action = self.actions[0] # a2
-
-        # Get rolling rewards sum
-        if self.t_step > self.nstep:
-            self.sum_rewards -= reward_to_subtract * self.discounting_oldest_reward
-        self.sum_rewards = self.gamma * self.sum_rewards + reward
-
-        # Get xv from info
-        if self.t_step >= self.nstep:
+        if not self.use_nstep:
             # Save experience in replay memory
-            self.memory.add(oldest_state, oldest_action, self.sum_rewards, next_state, done)
-            experiences = self.memory.sample()
-            self.learn(experiences)
-            
+            self.memory.add(state, action, reward, next_state, done)
+            if len(self.memory) > BATCH_SIZE:
+                experiences = self.memory.sample()
+                self.learn(experiences)
+        else:
+            self.t_step += 1
+            reward_to_subtract = self.rewards[0] if self.t_step > self.nstep else 0 # r1
+
+            self.states.append(state)
+            self.actions.append(action)
+            self.rewards.append(reward)
+
+            # Get oldest state and action to add to replay memory buffer
+            oldest_state = self.states[0] # s2
+            oldest_action = self.actions[0] # a2
+
+            # Get rolling rewards sum
+            if self.t_step > self.nstep:
+                self.sum_rewards -= reward_to_subtract * self.discounting_oldest_reward
+            self.sum_rewards = self.gamma * self.sum_rewards + reward
+
+            # Get xv from info
+            if self.t_step >= self.nstep:
+                # Save experience in replay memory
+                self.memory.add(oldest_state, oldest_action, self.sum_rewards, next_state, done)
+                if len(self.memory) > BATCH_SIZE:
+                    experiences = self.memory.sample()
+                    self.learn(experiences)
+
         # r2 + G*r1
         # r3 + G*r2 = ((r2 + G*r1) - G*r1)*G + r3
 #         nstep = 2
@@ -197,10 +206,10 @@ class Agent():
 
         # Calc loss
         loss = F.mse_loss(q_expected, q_targets)
-        if loss.item() > 5e15:
-            print(f'actions: {list(actions.detach().numpy().flatten())}')
-            print(f'q_expected: {list(q_expected.detach().numpy().flatten())}')
-            print(f'q_targets: {list(q_targets.detach().numpy().flatten())}')
+        if loss.item() > 5e150:
+            print(f'actions: {list(actions.cpu().detach().numpy().flatten())}')
+            print(f'q_expected: {list(q_expected.cpu().detach().numpy().flatten())}')
+            print(f'q_targets: {list(q_targets.cpu().detach().numpy().flatten())}')
             print(f'{loss=}')
             print(f'{target_preds=}')
             print(f'{invalid_actions_mask=}')

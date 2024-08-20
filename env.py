@@ -146,7 +146,7 @@ class TSPEnv():
 class MVCEnv():
     ERDOS_RENYI = 1
     BARABASI_ALBERT = 2
-    DEFAULT_ERDOS_RENYI_PROBABILITY = 0.15
+    DEFAULT_ERDOS_RENYI_PROBABILITY = 0.4
     DEFAULT_BARABASI_ALBERT_DEGREE = 4
     
     def __init__(
@@ -162,6 +162,10 @@ class MVCEnv():
         self.normalize_reward = normalize_reward
         self.graph_type = graph_type
         self.start_vertex = 0
+        self.graph_param = kwargs.get(
+            "graph_param",
+            MVCEnv.DEFAULT_ERDOS_RENYI_PROBABILITY if graph_type == MVCEnv.ERDOS_RENYI else MVCEnv.DEFAULT_BARABASI_ALBERT_DEGREE
+        )
         # TODO: remove this once training converges for single graph
         # self.G = self.graph_generator(n_min=self.n_min, n_max=self.n_max, k_nearest=k_nearest)
         self.reset()
@@ -181,9 +185,9 @@ class MVCEnv():
     def generate_graph(self, n_min, n_max):
         n = np.random.randint(n_min, n_max + 1)
         if self.graph_type == MVCEnv.ERDOS_RENYI:
-            return nx.erdos_renyi_graph(n, p=getattr(self, "p", self.DEFAULT_ERDOS_RENYI_PROBABILITY))
+            return nx.erdos_renyi_graph(n, p=self.graph_param)
         elif self.graph_type == MVCEnv.BARABASI_ALBERT:
-            return nx.barabasi_albert_graph(n, m=getattr(self, "m", self.DEFAULT_BARABASI_ALBERT_DEGREE))
+            return nx.barabasi_albert_graph(n, m=self.graph_param)
         raise ValueError("graph_type must be MVCEnv.ERDOS_RENYI or MVCEnv.BARABASI_ALBERT")
     
     def get_solution_score(self):
