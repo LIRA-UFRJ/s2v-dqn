@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from collections import namedtuple
 from typing import Callable, Dict, Optional
 
@@ -26,6 +27,23 @@ def graph_generator(n_min, n_max, pos_lim, k_nearest=None, seed=None) -> nx.Grap
 
     return G
 
+class BaseEnv(ABC):
+    @abstractmethod
+    def reset(self):
+        pass
+    
+    @abstractmethod
+    def get_observation(self):
+        pass
+    
+    @abstractmethod
+    def get_reward(self, action):
+        pass
+    
+    @abstractmethod
+    def step(self, action):
+        pass
+    
 class TSPEnv():
     def __init__(
         self,
