@@ -1,0 +1,29 @@
+experiment = "MVC - 10 nodes - Erdős–Rényi"
+problem = "MVC"
+
+[env]
+n_vertices = 10
+n_runs = 10
+graph_type = "ERDOS_RENYI"
+graph_params = { "p" = 0.4 }
+
+[train]
+lr_config = [ [ 0, 1e-3 ], [ 0.5, 1e-4 ], [ 0.75, 1e-5 ] ]
+
+[agent]
+nstep=1
+embedding_layers = 4
+embedding_dim = 64
+embed_dim=64
+T=4
+n_node_features=4
+n_edge_features=1
+normalize=True
+buffer_size=BUFFER_SIZE
+batch_size=BATCH_SIZE
+gamma=GAMMA
+tau=TAU
+lr=LR
+clip_grad_norm_value=CLIP_GRAD_NORM_VALUE
+update_target_each=UPDATE_TARGET_EACH
+target_update="hard"
