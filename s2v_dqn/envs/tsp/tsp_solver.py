@@ -21,7 +21,7 @@ class TSPSolver:
 
     @staticmethod
     def _get_concorde_solution(graph: nx.Graph, time_bound: float = 5.0, return_path: bool = False) -> Union[float, Tuple[float, List[int]]]:
-        pos = nx.get_node_attributes(graph, 'pos')
+        pos = nx.get_node_attributes(graph, 'coords')
         pos_numpy = np.array(list(pos.values()))
         solver = ConcordeTSPSolver.from_data(pos_numpy[:, 0], pos_numpy[:, 1], "EUC_2D")
 

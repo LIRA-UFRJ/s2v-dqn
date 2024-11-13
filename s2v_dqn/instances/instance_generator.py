@@ -32,18 +32,24 @@ class InstanceGenerator:
         return graph
 
     def generate_graph(self, seed: int = None):
-        rng = np.random.RandomState(seed) if seed is not None else np.random
+        rng = np.random.RandomState(abs(seed % (2**32))) if seed is not None else np.random
         n = rng.randint(self.n_min, self.n_max + 1)
         if self.graph_type == GraphType.ERDOS_RENYI:
-            return nx.erdos_renyi_graph(n, p=self.graph_params["p"], seed=rng)
+            while True:
+                _graph = nx.erdos_renyi_graph(n, p=self.graph_params["p"], seed=rng)
+                if _graph.number_of_edges() > 0:
+                    break
+            return _graph
         elif self.graph_type == GraphType.BARABASI_ALBERT:
             return nx.barabasi_albert_graph(n, m=self.graph_params["m"], seed=rng)
         elif self.graph_type == GraphType.EUCLIDEAN:
             graph = self._generate_euclidean_graph(n, rng=rng)
+            weighted_graph = graph.copy()
 
             # keep only k nearest neighbors
             k_nearest = self.graph_params.get("k_nearest")
             if k_nearest:
+                graph = graph.to_directed()
                 # add attribute to indicate the closest neighbors of each node
                 for u in range(n):
                     neighbors_rank = sorted(range(n), key=lambda v: graph[u][v]["weight"] if v != u else 0)
@@ -54,8 +60,9 @@ class InstanceGenerator:
 
                 edges_to_remove = [(u, v) for u, v in graph.edges if graph[u][v]["closest"] > k_nearest]
                 graph.remove_edges_from(edges_to_remove)
+                graph = graph.to_undirected()
 
-            return graph
+            return graph, weighted_graph
         raise ValueError(f"Invalid graph_type. It must be one of {list(GraphType.__members__.keys())}")
 #
 # def graph_generator(n_min, n_max, pos_lim, k_nearest=None, seed=None) -> nx.Graph:

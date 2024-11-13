@@ -25,13 +25,19 @@ def plot_graphs(agent_losses, val_scores, max_loss=1.0, save_to_path=None, **kwa
     losses_df = pd.DataFrame(agent_losses).T
     first_non_zero_idx = losses_df.ne(0).prod(axis=1).idxmax()
     losses_df = losses_df.iloc[first_non_zero_idx:, :]
-    losses_x = pd.DataFrame({'x': np.arange(first_non_zero_idx, len(agent_losses[0]) + 1)})
+    losses_x = pd.DataFrame({'x': np.arange(len(agent_losses[0]))})
 
-    pd.concat(
-        [losses_df, losses_x],
-        axis=1
-    ).plot(
-        x='x',
+    # print(f"{losses_df=}")
+    # print(f"{cat.head(20)=}")
+    # print(f"{cat.tail(20)=}")
+
+    # pd.concat(
+    #     [losses_df, losses_x],
+    #     axis=1
+    # )
+    losses_df.plot(
+        use_index=True,
+        # x='x',
         color='b',
         alpha=0.05,
         legend=False,
@@ -42,13 +48,30 @@ def plot_graphs(agent_losses, val_scores, max_loss=1.0, save_to_path=None, **kwa
     losses_df_mean = losses_df.mean(axis=1)
     losses_df_mean.plot(color='r', title=f'Loss Function', ax=ax[0])
 
+    losses_df_stddev = losses_df.std(axis=1)
+    losses_df_lower = losses_df_mean - losses_df_stddev
+    losses_df_upper = losses_df_mean + losses_df_stddev
+
+    # print(f"{losses_x.shape=}")
+    # print(f"{losses_df.shape=}")
+    # print(f"{losses_df_lower.shape=}")
+    # print(f"{losses_df_upper.shape=}")
+
+    ax[0].fill_between(
+        np.arange(first_non_zero_idx, first_non_zero_idx + len(losses_df_lower)),
+        losses_df_lower,
+        losses_df_upper,
+        facecolor='b',
+        alpha=0.2
+    )
+
     ax[0].set_xlabel('Episode')
     ax[0].set_ylim((0, max_loss))
     ax[0].set_title(f'Loss function')
 
     val_df = pd.DataFrame(val_scores).T
     val_x_start = 0 if kwargs.get('validate_at_start', False) else 1
-    val_x = pd.DataFrame({'x': np.arange(val_x_start, len(val_scores[0]) + 1) * kwargs.get('validate_each', 1)})
+    val_x = pd.DataFrame({'x': np.arange(val_x_start, len(val_scores[0])) * kwargs.get('validate_each', 1)})
 
     pd.concat(
         [val_df, val_x],
@@ -63,10 +86,21 @@ def plot_graphs(agent_losses, val_scores, max_loss=1.0, save_to_path=None, **kwa
         ax=ax[1]
     )
     val_df_mean = val_df.mean(axis=1)
-    print(f'Min of avg validation score across episodes: {val_df_mean.min()}')
+    val_df_stddev = val_df.std(axis=1)
+    val_df_lower = val_df_mean - val_df_stddev
+    val_df_upper = val_df_mean + val_df_stddev
+
+    # print(f"{val_x=}")
+    # print(f"{val_df_mean=}")
+    # print(f"{val_df_lower=}")
+    # print(f"{val_df_upper=}")
+
     pd.concat([val_df_mean, val_x], axis=1).plot(x='x', color='r', legend=False, title=f'Validation scores', ax=ax[1])
+    ax[1].fill_between(val_x.to_numpy().flatten(), val_df_lower, val_df_upper, facecolor='b', alpha=0.2)
     ax[1].set_xlabel('Episode')
     ax[1].set_title('Validation scores')
+
+    print(f'Min of avg validation score across episodes: {val_df_mean.min()}')
 
     # subtitle_keys = ['n_vertices', 'lr_config', 'batch_size']
     subtitle_keys = ['n_vertices', 'batch_size']

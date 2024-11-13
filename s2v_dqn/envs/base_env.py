@@ -13,13 +13,13 @@ EnvInfo = namedtuple("EnvInfo", field_names=["observation", "reward", "done"])
 @dataclasses.dataclass
 class BaseEnv(ABC):
     instance_generator: InstanceGenerator
-    graph_params: dict
+    n_node_features: int
+    n_edge_features: int
     graph: nx.Graph = None
-    xv: np.ndarray = None
     normalize_reward: bool = True
 
     @abstractmethod
-    def reset(self, seed: int = None) -> EnvInfo:
+    def reset(self, seed: int = None) -> tuple:
         """
         Reset the environment and generates a new graph instance
         :return: The observation for the new environment
@@ -27,20 +27,11 @@ class BaseEnv(ABC):
         pass
 
     @abstractmethod
-    def get_observation(self):
+    def get_observation(self) -> tuple:
         """
         Return the observation for the environment, which consists of all of the needed
         info to retrieve the current state, e.g. the graph, the partial solution, etc.
-        :return: The observation for the current state of the environment
-        """
-        pass
-
-    @abstractmethod
-    def get_reward(self, action: int) -> float:
-        """
-        Get reward for given action in the current state
-        :param action: the action taken
-        :return: Reward for given action in the current state
+        :return: The observation for the current state of the environment, with optional edge features
         """
         pass
 

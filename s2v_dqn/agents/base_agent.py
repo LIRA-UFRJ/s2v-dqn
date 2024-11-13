@@ -7,7 +7,7 @@ class BaseAgent(ABC):
     _SUPPORTED_PROBLEMS = {}
 
     def __init__(self, problem: str, *args, **kwargs):
-        problem = problem.lower()
+        self.problem = problem.lower()
         assert problem in self._SUPPORTED_PROBLEMS
 
     @abstractmethod
@@ -15,7 +15,7 @@ class BaseAgent(ABC):
         pass
 
     @abstractmethod
-    def step(self, state, action, reward, next_state, done):
+    def step(self, state, edge_feature, action, reward, next_state, next_edge_feature, done):
         pass
 
     @abstractmethod

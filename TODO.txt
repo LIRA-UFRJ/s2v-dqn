@@ -1,5 +1,53 @@
 TODO:
 
+
+- refactor
+    x MVC
+    x TSP
+        x add node to best place
+    x try larger periods without updating target networks
+    x train
+    x eval
+    x plot
+        x add graph type to (sub)title
+        x remove zeros
+    - metrics
+        x check best acc/approx ratio
+        x save agent on that
+        - which of the 10 agents to use for testing? answer: average of them
+    x instance generation
+- test concorde
+- which solver to use for larger MVC instances?
+- train on instance size and test on larger size
+x generate instance with given seed
+x TSP implement knn correctly - adjust to use knn only on adjacency matrix, but weights are still on complete graph
+x check Euclidean KNN graph construction
+x edge feature as separate object
+    x adjust MVC
+    x add same_sign to TSP
+x TSP insert node at any point in the tour
+- try sparse PyTorch matrix representation
+- MVC ratio of covered nodes, ratio of covered edges -> concat to Qhat after relu(theta6/theta7)
+x agent.learn() only every K steps instead of every step
+x agents save/load
+- benchmark different MVC PuLP solvers
+- experiments computing td error of max(n_vertices, r + gamma*Q_target) (??)
+- check code TODOs
+- README
+    - instruction to run from root - atm the outputs path is broken (from s2v_dqn instead of root)
+- *.toml file for experiments
+- PyG benchmark
+    - GCN / GCNConv
+    - GAT / GATConv
+- create agents: ECO-DQN and S2V-DQN, Random, some heuristics
+- RL4CO benchmark
+- Cap (???)
+- LICENSEs for all dependencies
+- docstrings
+- DQNAgent inherit from both BaseAgent and TargetNetworkAgent
+- replace print with logger/logging
+
+x solver performance benchmark
 x graph knn
 x node features + adj matrix
     x env
@@ -10,12 +58,12 @@ x edge features
 x layer parameters
 x don't clear replay buffer on env.reset()
 - one replay buffer per graph size
-- hyperparameters from appendix
-    - learning rate exponential decay
-    - epsilon linear decay
-- episodes = #minibatches / #avg vertices per episode
-- (normalize sums) try replacing sum with avg in TSP model when computing graph embedding
-- generate graphs from same distribution from paper
+x hyperparameters from appendix
+    x learning rate exponential decay
+    x epsilon linear decay
+x episodes = #minibatches / #avg vertices per episode
+x (normalize sums) try replacing sum with avg in TSP model when computing graph embedding
+x generate graphs from same distribution from paper
 
 x negate reward
 x fix run on GPU
@@ -28,4 +76,4 @@ x implement training loop
 x test step
 x implement validation with exact solution, calc'd by DP TSP
 x target network (?) with hard/soft update
-- revisit docstrings
+x revisit docstrings

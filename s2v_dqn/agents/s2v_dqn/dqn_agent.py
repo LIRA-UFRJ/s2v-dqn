@@ -1,15 +1,15 @@
-import numpy as np
 import random
+import sys
 from collections import deque
 
-from s2v_dqn.agents.base_agent import BaseAgent
-from s2v_dqn.agents.s2v_dqn.model import QNetwork
-from s2v_dqn.agents.s2v_dqn.replay_buffer import ReplayBuffer
-
+import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
 
+from s2v_dqn.agents.base_agent import BaseAgent
+from s2v_dqn.agents.s2v_dqn.model import QNetwork
+from s2v_dqn.agents.s2v_dqn.replay_buffer import ReplayBuffer
 
 BUFFER_SIZE = int(1e5)    # replay buffer size
 BATCH_SIZE = 64           # minibatch size
@@ -17,7 +17,9 @@ GAMMA = 1.00              # discount factor
 TAU = 1e-3                # for soft update of target parameters
 LR = 1e-4                 # learning rate
 CLIP_GRAD_NORM_VALUE = 5  # value of gradient to clip while training
-UPDATE_TARGET_EACH = 100  # number of steps to wait until updating target network
+UPDATE_TARGET_EACH = 1000 # number of steps to wait until updating target network
+UPDATE_PARAMS_EACH = 4    # number of steps to wait until sampling experience tuples and updating model params
+WARMUP_STEPS = 1000       # number of steps to wait before
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -27,26 +29,37 @@ class DQNAgent(BaseAgent):
 
     _SUPPORTED_PROBLEMS = {'mvc', 'tsp'}
 
-    def __init__(self, problem, nstep=1, embedding_dim=64, embedding_layers=4, n_node_features=4,
-                 n_edge_features=1, normalize=True, buffer_size=BUFFER_SIZE, batch_size=BATCH_SIZE,
-                 gamma=GAMMA, tau=TAU, lr=LR, clip_grad_norm_value=CLIP_GRAD_NORM_VALUE,
-                 update_target_each=UPDATE_TARGET_EACH, target_update="hard"):
-        """Initialize an Agent object.
-        
-        Params
-        ======
-            state_size (int): dimension of each state
-            action_size (int): dimension of each action
-            seed (int): random seed
-        """
+    def __init__(
+        self,
+        problem,
+        nstep=1,
+        embedding_dim=64,
+        embedding_layers=4,
+        n_node_features=4,
+        n_edge_features=1,
+        normalize=True,
+        buffer_size=BUFFER_SIZE,
+        batch_size=BATCH_SIZE,
+        gamma=GAMMA,
+        tau=TAU,
+        lr=LR,
+        clip_grad_norm_value=CLIP_GRAD_NORM_VALUE,
+        update_target_each=UPDATE_TARGET_EACH,
+        target_update="hard",
+        update_params_each=UPDATE_PARAMS_EACH,
+        warmup_steps=WARMUP_STEPS,
+    ):
+        """Initialize an Agent object"""
         super().__init__(problem)
 
         self.nstep = abs(nstep)
-        self.use_nstep = nstep > 0
+        self.use_nstep = nstep > 1
 
         self.gamma = gamma
         self.clip_grad_norm_value = clip_grad_norm_value
         self.update_target_each = update_target_each
+        self.update_params_each = update_params_each
+        self.warmup_steps = warmup_steps
         self.tau = tau
         self.target_update = target_update
         assert target_update in ("soft", "hard"), 'target_update must be one of {"soft", "hard"}'
@@ -59,18 +72,19 @@ class DQNAgent(BaseAgent):
         self.qnetwork_target = QNetwork(embed_dim=embedding_dim, embedding_layers=embedding_layers, n_node_features=n_node_features,
                                         n_edge_features=n_edge_features, normalize=normalize).to(device, dtype=torch.float32)
 
-        # torch.nn.init.xavier_normal_(self.qnetwork_local.embedding_layer.theta1.weight)
-        # torch.nn.init.xavier_normal_(self.qnetwork_local.embedding_layer.theta2.weight)
-        # torch.nn.init.xavier_normal_(self.qnetwork_local.embedding_layer.theta3.weight)
-        # torch.nn.init.xavier_normal_(self.qnetwork_local.embedding_layer.theta4.weight)
-        # torch.nn.init.xavier_normal_(self.qnetwork_local.q_layer.theta5.weight)
-        # torch.nn.init.xavier_normal_(self.qnetwork_local.q_layer.theta6.weight)
-        # torch.nn.init.xavier_normal_(self.qnetwork_local.q_layer.theta7.weight)
-
         self.hard_update(self.qnetwork_local, self.qnetwork_target)
         self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=lr)
 
-        # Internal values accross steps 
+        self.global_t_step = 0
+
+        # Replay memory
+        self.memory = ReplayBuffer(buffer_size, batch_size)
+
+        # To be used in n-step learning
+        self.gamma_n_minus_1 = self.gamma ** (self.nstep - 1)
+        self.gamma_n = self.gamma ** self.nstep
+
+        # Internal values accross steps
         self.episode_losses = []
         self.losses = []
         self.q_expecteds = []
@@ -85,65 +99,31 @@ class DQNAgent(BaseAgent):
         self.theta6s = []
         self.theta7s = []
 
-        self.update_t_step = 0
-
-        # Replay memory
-        self.memory = ReplayBuffer(buffer_size, batch_size)
-
-        # To be used in n-step learning
-        self.gamma_n_minus_1 = self.gamma ** (self.nstep - 1)
-        self.gamma_n = self.gamma ** self.nstep
+        # torch.nn.init.xavier_normal_(self.qnetwork_local.embedding_layer.theta1.weight)
+        # torch.nn.init.xavier_normal_(self.qnetwork_local.embedding_layer.theta2.weight)
+        # torch.nn.init.xavier_normal_(self.qnetwork_local.embedding_layer.theta3.weight)
+        # torch.nn.init.xavier_normal_(self.qnetwork_local.embedding_layer.theta4.weight)
+        # torch.nn.init.xavier_normal_(self.qnetwork_local.q_layer.theta5.weight)
+        # torch.nn.init.xavier_normal_(self.qnetwork_local.q_layer.theta6.weight)
+        # torch.nn.init.xavier_normal_(self.qnetwork_local.q_layer.theta7.weight)
 
         # Initial episode config
         self.reset_episode()
 
     def reset_episode(self):
-        self.t_step = 0
+        self.espisode_t_step = 0
         self.states = deque(maxlen=self.nstep)
+        self.edge_features = deque(maxlen=self.nstep)
         self.actions = deque(maxlen=self.nstep)
         self.rewards = deque(maxlen=self.nstep)
         self.sum_rewards = 0
-        # TODO: check if clear_buffer is needed
-        # self.memory.clear_buffer()
 
         if self.qnetwork_local.training:
             self.losses.append(sum(self.episode_losses) / len(self.episode_losses) if len(self.episode_losses) > 0 else 0)
             self.episode_losses = []
 
-    def step(self, state, action, reward, next_state, done):
-        self.t_step += 1
-        if not self.use_nstep:
-            # Save experience in replay memory
-            self.memory.add(state, action, reward, next_state, done)
-            if len(self.memory) > BATCH_SIZE:
-                experiences = self.memory.sample()
-                self.learn(experiences)
-        else:
-            reward_to_subtract = self.rewards[0] if self.t_step > self.nstep else 0  # r1
-
-            self.states.append(state)
-            self.actions.append(action)
-            self.rewards.append(reward)
-
-            # Get oldest state and action to add to replay memory buffer
-            oldest_state = self.states[0]  # s2
-            oldest_action = self.actions[0]  # a2
-
-            # Get rolling rewards sum
-            if self.t_step > self.nstep:
-                self.sum_rewards -= reward_to_subtract * self.gamma_n_minus_1
-            self.sum_rewards = self.gamma * self.sum_rewards + reward
-
-            # Get xv from info
-            if self.t_step >= self.nstep:
-                # Save experience in replay memory
-                self.memory.add(oldest_state, oldest_action, self.sum_rewards, next_state, done)
-                if len(self.memory) > BATCH_SIZE:
-                    experiences = self.memory.sample()
-                    self.learn(experiences)
-
     @torch.no_grad()
-    def act(self, obs, *args, **kwargs):
+    def act(self, state, edge_feature, *args, **kwargs):
         """Returns actions for given state as per current policy.
 
         Params
@@ -151,14 +131,27 @@ class DQNAgent(BaseAgent):
             obs        : current observation
             eps (float): epsilon, for epsilon-greedy action selection
         """
-        obs = torch.from_numpy(obs).to(device, dtype=torch.float32)
-        xv = obs[:, 0]
-        valid_actions = (xv == 0).nonzero()
+        state = torch.from_numpy(state).to(device, dtype=torch.float32)
+        edge_feature = torch.from_numpy(edge_feature).to(device, dtype=torch.float32)
 
-        # IMPORTANT: This should be the first vertex in the tour
-        # TODO: replace with env.start_vertex
-        if len(valid_actions) == 0:
-            return 0
+        # print(f"{edge_feature.shape=}")
+
+        # TODO: remove this
+        # Valid actions are nodes that:
+        # - aren´t already in the partial solution
+        # - [TSP] can be linked to the final node in tour (or to any node in tour if insertion at any point is allowed)
+        # xv = obs[:, 0]
+        # if self.problem == 'tsp':
+        #     last = obs[:, 1].argmax()
+        #     n_vertices = obs.shape[0]
+        #     adj = obs[:, self.n_node_features:(self.n_node_features + n_vertices)]
+        #     valid_actions = ((xv == 0) * adj[last, :]).nonzero()
+        # else:
+        #     valid_actions = (xv == 0).nonzero()
+
+        # Valid actions are nodes that aren´t already in the partial solution
+        xv = state[:, 0]
+        valid_actions = (xv == 0).nonzero()
 
         # Epsilon-greedy: greedy action selection
         eps = kwargs.get("eps", 0.0)
@@ -167,10 +160,63 @@ class DQNAgent(BaseAgent):
             action = valid_actions[action_idx].item()
             return action
 
-        action_values = self.qnetwork_local(obs).squeeze(0)  # squeeze to remove NN batching
+        action_values = self.qnetwork_local(state, edge_feature).squeeze(0)  # squeeze to remove NN batching
+        # print(f"{action_values=}")
+        # print(f"{action_values.shape=}")
+        # print(f"{valid_actions=}")
+        # print(f"{xv=}")
         valid_actions_idx = action_values[valid_actions].argmax().item()
         action = valid_actions[valid_actions_idx].item()
         return action
+
+    def step(self, state, edge_feature, action, reward, next_state, next_edge_feature, done):
+        self.espisode_t_step += 1
+        self.global_t_step += 1
+        if not self.use_nstep:
+            # Save experience in replay memory
+            self.memory.add(state, edge_feature, action, reward, next_state, next_edge_feature, done)
+            if len(self.memory) > BATCH_SIZE:
+                experiences = self.memory.sample()
+                self.learn(experiences)
+        else:
+            reward_to_subtract = self.rewards[0] if self.espisode_t_step > self.nstep else 0  # r1
+
+            self.states.append(state)
+            self.edge_features.append(edge_feature)
+            self.actions.append(action)
+            self.rewards.append(reward)
+
+            if len(self.rewards) <= self.nstep:
+                self.sum_rewards += reward * (self.gamma ** (len(self.rewards)-1))
+            else:
+                # reward_to_subtract = self.rewards[0]
+                self.sum_rewards = (self.sum_rewards - reward_to_subtract) / self.gamma
+                self.sum_rewards += reward * self.gamma_n_minus_1
+
+            # Get xv from info
+            if self.espisode_t_step >= self.nstep:
+                # Get oldest state and action (S_{t-n}, a_{t-n}) to add to replay memory buffer
+                oldest_state = self.states[0]
+                oldest_edge_feature = self.edge_features[0]
+                oldest_action = self.actions[0]
+
+                # Save experience in replay memory
+                self.memory.add(
+                    oldest_state,
+                    oldest_edge_feature,
+                    oldest_action,
+                    self.sum_rewards,
+                    next_state,
+                    next_edge_feature,
+                    done
+                )
+
+            # Different from the paper, as it should be called inside (if self.t_step >= self.nstep)
+            if len(self.memory) >= BATCH_SIZE \
+                    and self.global_t_step % self.update_params_each == 0 \
+                    and self.global_t_step >= self.warmup_steps:
+                experiences = self.memory.sample()
+                self.learn(experiences)
 
     # def get_valid_actions(self, states):
     #     actions = [torch.nonzero(state == 0).view(-1) for state in states]
@@ -183,12 +229,30 @@ class DQNAgent(BaseAgent):
         ======
             experiences (Tuple[torch.Variable]): tuple of (s, a, r, s', done) tuples 
         """
-        states, actions, rewards, next_states, dones = experiences
+        states, edge_features, actions, rewards, next_states, next_edge_features, dones = experiences
 
-        target_preds = self.qnetwork_target(next_states)
-        invalid_actions_mask = (next_states[:, :, 0] == 1)
-        replace = invalid_actions_mask.sum(axis=1) == invalid_actions_mask.shape[1]
-        invalid_actions_mask[:, 0] = torch.where(replace, False, invalid_actions_mask[:, 0])
+        target_preds = self.qnetwork_target(next_states, next_edge_features)
+
+        # # TODO: remove this
+        # # xv.shape = (batch_size, n_vertices)
+        # xv = next_states[:, :, 0]
+        # if self.problem == 'tsp':
+        #     batch_size, n_vertices, _ = next_states.shape
+        #     # adj.shape = (batch_size, n_vertices, n_vertices)
+        #     adj = next_states[:, :, self.n_node_features:(self.n_node_features + n_vertices)]
+        #     last = next_states[:, :, 1].argmax(dim=1)
+        #     valid_actions_mask = torch.logical_and((xv == 0), adj[torch.arange(batch_size), last])
+        #     invalid_actions_mask = ~valid_actions_mask
+        #     # print(f"{invalid_actions_mask.shape=}")
+        # else:
+        #     invalid_actions_mask = (xv == 1)
+        xv = next_states[:, :, 0]
+        invalid_actions_mask = (xv == 1)
+
+        # // Not needed anymore
+        # If all nodes are invalid, set first node as valid - so that the agent can return to start of tour on TSP
+        # replace = invalid_actions_mask.sum(axis=1) == invalid_actions_mask.shape[1]
+        # invalid_actions_mask[:, 0] = torch.where(replace, False, invalid_actions_mask[:, 0])
 
         # Calculate q_targets_next for valid actions
         # target_preds.shape = (batch_size, n_vertices)
@@ -196,7 +260,7 @@ class DQNAgent(BaseAgent):
             q_targets_next = target_preds.masked_fill(invalid_actions_mask, -1e18).max(1, True)[0]
 
         # Calculate Q value
-        q_expected = self.qnetwork_local(states).gather(1, actions)
+        q_expected = self.qnetwork_local(states, edge_features).gather(1, actions)
 
         # Calc q_targets based on Q_targets_next
         q_targets = rewards + self.gamma_n * q_targets_next * (1 - dones)
@@ -222,8 +286,7 @@ class DQNAgent(BaseAgent):
         if self.target_update == "soft":
             self.soft_update(self.qnetwork_local, self.qnetwork_target, self.tau)
         elif self.target_update == "hard":
-            self.update_t_step = (self.update_t_step + 1) % self.update_target_each
-            if self.update_t_step == 0:
+            if self.global_t_step % self.update_target_each == 0:
                 self.hard_update(self.qnetwork_local, self.qnetwork_target)
 
     def _log_params(self, actions, dones, invalid_actions_mask, loss, next_states, q_expected, q_targets, states, target_preds):
@@ -238,16 +301,15 @@ class DQNAgent(BaseAgent):
             print(f'{1 - dones=}')
             print(f'{states=}')
             print(f'{next_states=}')
-            print(f'{self.t_step=}')
-            import sys
+            print(f'{self.espisode_t_step=}')
             sys.exit(0)
         self.q_targets.append(q_targets.min().item())
         self.q_expecteds.append(q_expected.min().item())
         # self.params.append(next(self.qnetwork_local.parameters())[0,0].item())
-        self.theta1s.append(self.qnetwork_local.embedding_layer.theta1.weight[0, 0].item())
+        self.theta1s.append(self.qnetwork_local.node_features_embedding_layer.theta1.weight[0, 0].item())
         self.theta2s.append(self.qnetwork_local.embedding_layer.theta2.weight[0, 0].item())
-        self.theta3s.append(self.qnetwork_local.embedding_layer.theta3.weight[0, 0].item())
-        # self.theta4s.append(self.qnetwork_local.embedding_layer.theta4.weight[0,0].item())
+        self.theta3s.append(self.qnetwork_local.edge_features_embedding_layer.theta3.weight[0, 0].item())
+        # self.theta4s.append(self.qnetwork_local.edge_features_embedding_layer.theta4.weight[0,0].item())
         self.theta5s.append(self.qnetwork_local.q_layer.theta5.weight[0, 0].item())
         self.theta6s.append(self.qnetwork_local.q_layer.theta6.weight[0, 0].item())
         self.theta7s.append(self.qnetwork_local.q_layer.theta7.weight[0, 0].item())
@@ -286,3 +348,21 @@ class DQNAgent(BaseAgent):
         """Configure PyTorch modules to be in eval mode"""
         self.qnetwork_target.eval()
         self.qnetwork_local.eval()
+
+    def load_model(self, checkpoint_path):
+        """Load model's checkpoint"""
+        checkpoint = torch.load(checkpoint_path)
+        self.global_t_step = checkpoint['global_t_step']
+        self.qnetwork_local.load_state_dict(checkpoint['qnetwork_local'])
+        self.qnetwork_target.load_state_dict(checkpoint['qnetwork_target'])
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
+
+    def save_model(self, checkpoint_path):
+        """Save model's checkpoint"""
+        checkpoint = {
+            'global_t_step': self.global_t_step,
+            'qnetwork_local': self.qnetwork_local.state_dict(),
+            'qnetwork_target': self.qnetwork_target.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+        }
+        torch.save(checkpoint, checkpoint_path)

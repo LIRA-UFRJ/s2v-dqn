@@ -23,7 +23,7 @@ mvc_base_params = {
 params = {
     **mvc_base_params,
     'graph_type': GraphType.BARABASI_ALBERT,
-    'n': 10,
+    'n_vertices': 10,
     'graph_params': {'m': 4},
     'n_episodes': 200,
     'validate_each': 20,

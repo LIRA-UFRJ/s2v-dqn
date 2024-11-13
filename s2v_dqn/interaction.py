@@ -1,4 +1,5 @@
 import datetime
+import logging
 import os
 import re
 import sys
@@ -20,35 +21,45 @@ from s2v_dqn.instances.instance_generator import InstanceGenerator
 from s2v_dqn.utils import plot_graphs
 
 
-def run_episode(agent: DQNAgent, env: BaseEnv, eps=0, train_mode=True, print_actions=False):
-    state = env.reset()
+def run_episode(agent: DQNAgent, env: BaseEnv, eps=0, train_mode=True, print_actions=False, seed=None):
+    state, edge_feature = env.reset(seed)
     agent.reset_episode()
     score = 0
     while True:
-        action = agent.act(state, eps=eps)
+        action = agent.act(state, edge_feature, eps=eps)
         if print_actions:
             print(action)
-        next_state, reward, done = env.step(action)
+        (next_state, next_edge_feature), reward, done = env.step(action)
         score += reward
         if train_mode:
-            agent.step(state, action, reward, next_state, done)
-        state = next_state
+            agent.step(state, edge_feature, action, reward, next_state, next_edge_feature, done)
+        state, edge_feature = next_state, next_edge_feature
         if done:
             break
     return score
 
 
 @torch.inference_mode()
-def run_validation(agent: DQNAgent, env: BaseEnv, n_episodes_validation: int, exact_solution_max_size: int = 0, print_to_file=sys.stdout):
+def run_validation(agent: DQNAgent,
+                   env: BaseEnv,
+                   n_episodes_validation: int,
+                   exact_solution_max_size: int = 0,
+                   print_to_file=sys.stdout,
+                   seed_prefix=None):
     agent.eval()
     val_scores = []
-    isolated = []
-    isolated_in_sol = []
-    for i in range(1, n_episodes_validation + 1):
-        run_episode(agent, env, train_mode=False)
+    # isolated = []
+    # isolated_in_sol = []
+    for val_episode_idx in range(1, n_episodes_validation + 1):
+        seed = abs(hash(f"{seed_prefix}_val_{val_episode_idx}")) if seed_prefix is not None else None
+        run_episode(agent, env, train_mode=False, seed=seed)
         score = env.get_current_solution()
         solution = env.get_best_solution(exact_solution_max_size)
-        approximation_ratio = score / solution if score >= solution else solution / score
+        if solution == 0:
+            logging.warning("Solution = 0, seed =", seed)
+            approximation_ratio = 0
+        else:
+            approximation_ratio = score / solution # if score >= solution else solution / score
         val_scores.append(approximation_ratio)
         # cnt = 0
         # cnt_in_sol = 0
@@ -109,7 +120,8 @@ def log_data(writer: Optional[SummaryWriter],
         writer.add_scalar('Loss', episode_loss, episode_idx)
 
 
-def run_train(agent: DQNAgent,
+def run_train(problem: str,
+              agent: DQNAgent,
               env: BaseEnv,
               eps_start: float,
               eps_decay: float,
@@ -144,18 +156,21 @@ def run_train(agent: DQNAgent,
     eps = eps_start
     start_time = time()
     if validate_at_start:
+        seed_prefix = f"{problem}_{experiment_idx}_{run_idx}_0"
         val_score = run_validation(
             agent,
             env,
             n_episodes_validation,
             print_to_file=print_to_file,
             exact_solution_max_size=exact_solution_max_size,
+            seed_prefix=seed_prefix,
         )['mean']
         val_scores.append(val_score)
     for episode_idx in range(start_episode, n_episodes + 1):
         try:
             # run episode for given episode_idx
-            episode_score = run_episode(agent, env, eps, train_mode=True)
+            seed = abs(hash(f"{problem}_{experiment_idx}_{run_idx}_{episode_idx}_train"))
+            episode_score = run_episode(agent, env, eps, train_mode=True, seed=seed)
             episode_loss = agent.losses[-1] if len(agent.losses) > 0 else None
             eps = max(eps * eps_decay if eps_decay >= 0 else eps + eps_decay, eps_end)
             scores.append(episode_score)
@@ -168,7 +183,7 @@ def run_train(agent: DQNAgent,
                 for g in agent.optimizer.param_groups:
                     g['lr'] = lr
 
-            if episode_idx % print_train_metrics_each == 0:
+            if episode_idx % print_train_metrics_each == 0 and len(agent.q_targets) > 0:
                 print(
                     f"[{episode_idx}/{n_episodes}] "
                     f"loss: {agent.losses[-1]:.3e}, "
@@ -179,7 +194,7 @@ def run_train(agent: DQNAgent,
                     file=print_to_file,
                     flush=True
                 )
-                if print_thetas:
+                if print_thetas and len(agent.theta1s) > 0:
                     print(f"    θ1: {agent.theta1s[-1]:.3e}, "
                           f"θ2: {agent.theta2s[-1]:.3e}, "
                           f"θ3: {agent.theta3s[-1]:.3e}, "
@@ -192,16 +207,19 @@ def run_train(agent: DQNAgent,
 
             # check if we should run validation
             if episode_idx % validate_each == 0:
+                seed_prefix = f"{problem}_{experiment_idx}_{run_idx}_{episode_idx}"
                 val_score = run_validation(
                     agent,
                     env,
                     n_episodes_validation,
                     print_to_file=print_to_file,
                     exact_solution_max_size=exact_solution_max_size,
+                    seed_prefix=seed_prefix,
                 )['mean']
                 if isinstance(scheduler, ReduceLROnPlateau):
                     scheduler.step(val_score)
                 val_scores.append(val_score)
+                agent.save_model(f"../checkpoints/{problem}_{experiment_idx}_{run_idx}_{episode_idx}.pth")
 
             # Log weights, gradients, episode reward and optionally the loss
             log_data(writer, agent.qnetwork_local, episode_idx, episode_score, episode_loss)
@@ -242,6 +260,7 @@ def train(n_runs: int,
     validate_at_start = params.get('validate_at_start', False)
     env_extra_params = params.get('env_extra_params', {})
     exact_solution_max_size = params.get('exact_solution_max_size', 20)
+    discount_factor = params.get('discount_factor', 1.0)
 
     # Params without defaults
     n_vertices = params['n_vertices']
@@ -262,10 +281,18 @@ def train(n_runs: int,
     print({"problem": problem, **params})
     print({"problem": problem, **params}, file=f_log)
 
-    n_node_features, n_edge_features = {
-        'mvc': (1, 0),  # only xv for nodes, no edge features
-        'tsp': (4, 1),  # xv, x/y coordinates, start/end node
+    instance_generator = InstanceGenerator(
+        n_min=n_vertices,
+        n_max=n_vertices,
+        graph_type=params['graph_type'],
+        graph_params=graph_params
+    )
+
+    env_class = {
+        'mvc': MVCEnv,
+        'tsp': TSPEnv,
     }[problem]
+    env = env_class(instance_generator, **env_extra_params)
 
     all_agent_losses = []
     all_val_scores = []
@@ -276,23 +303,12 @@ def train(n_runs: int,
             nstep=params.get('nstep', 1),
             normalize=params.get('normalize', True),
             batch_size=batch_size,
-            lr=1,  # LR is set via LR scheduler
-            n_node_features=n_node_features,
-            n_edge_features=n_edge_features,
-            embedding_layers=embedding_layers
+            lr=lr_config[0][1],
+            n_node_features=env.n_node_features,
+            n_edge_features=env.n_edge_features,
+            embedding_layers=embedding_layers,
+            gamma=discount_factor,
         )
-
-        instance_generator = InstanceGenerator(
-            n_min=n_vertices,
-            n_max=n_vertices,
-            graph_type=params['graph_type'],
-            graph_params=graph_params
-        )
-        env_class = {
-            'mvc': MVCEnv,
-            'tsp': TSPEnv,
-        }[problem]
-        env = env_class(instance_generator, graph_params, **env_extra_params)
 
         def lr_lambda(_lr_config: list):
             """
@@ -324,6 +340,7 @@ def train(n_runs: int,
         print(f'Starting run #{run_idx+1}/{n_runs}...')
         print(f'Starting run #{run_idx+1}/{n_runs}...', file=f_log)
         scores, val_scores = run_train(
+            problem,
             agent,
             env,
             eps_start,
@@ -359,7 +376,7 @@ def train(n_runs: int,
     plot_graphs(
         all_agent_losses,
         all_val_scores,
-        max_loss=1,
+        max_loss=0.1,
         save_to_path=filename_plot,
         n_vertices=n_vertices,
         lr_config=lr_config,

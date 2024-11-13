@@ -11,19 +11,19 @@ graph_params = { "p" = 0.4 }
 lr_config = [ [ 0, 1e-3 ], [ 0.5, 1e-4 ], [ 0.75, 1e-5 ] ]
 
 [agent]
-nstep=1
-embedding_layers = 4
+nstep = 2
+embedding_layers = 5
 embedding_dim = 64
-embed_dim=64
-T=4
-n_node_features=4
-n_edge_features=1
-normalize=True
-buffer_size=BUFFER_SIZE
-batch_size=BATCH_SIZE
-gamma=GAMMA
-tau=TAU
-lr=LR
-clip_grad_norm_value=CLIP_GRAD_NORM_VALUE
-update_target_each=UPDATE_TARGET_EACH
-target_update="hard"
+n_node_features = 1  # only boolean if node is in the partial solution
+n_edge_features = 0  # no edge features
+normalize = true
+buffer_size = 1e5
+batch_size = 64
+gamma = 1.0
+tau = 1e-3
+clip_grad_norm_value = 5
+update_target_each = 100
+target_update = "hard"
+
+[test]
+compare_with = []

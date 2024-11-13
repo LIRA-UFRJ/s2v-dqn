@@ -10,6 +10,8 @@ from s2v_dqn.envs.base_env import BaseEnv, EnvInfo
 @dataclasses.dataclass
 class MVCEnv(BaseEnv):
     # use_pyg: bool = False
+    n_node_features: int = 1
+    n_edge_features: int = 0
 
     def __post_init__(self):
         self.fixed_graph = self.graph is not None
@@ -22,10 +24,10 @@ class MVCEnv(BaseEnv):
         # precompute some node features
         self.graph_adj_matrix = nx.to_numpy_array(self.graph, weight=None)
 
-        self.n = self.graph.number_of_nodes()
+        self.n_vertices = self.graph.number_of_nodes()
         self.n_edges = self.graph.number_of_edges()
         self.covered_edges = 0
-        self.xv = np.zeros(self.n)
+        self.xv = np.zeros(self.n_vertices)
         self.solution_size = 0
         return self.get_observation()
 
@@ -38,7 +40,7 @@ class MVCEnv(BaseEnv):
             - adjacency matrix                           # range [0,1]
         """
         # 0/1 if final path node
-        ret = np.column_stack([
+        state = np.column_stack([
             self.xv,
             self.graph_adj_matrix,
         ])
@@ -47,20 +49,16 @@ class MVCEnv(BaseEnv):
         #     self.xv,
         #     self.graph_adj_matrix
         # ])
+        edge_features = np.zeros((self.n_vertices, self.n_vertices, 0))
 
-        return ret
-
-    def get_reward(self, action: int) -> float:
-        reward = -1
-        reward_norm_adjusted = reward / self.n if self.normalize_reward else reward
-        return reward_norm_adjusted
+        return state, edge_features
 
     def step(self, action: int) -> EnvInfo:
-        assert 0 <= action < self.n, f"Vertex {action} should be in the range [0, {self.n-1}]"
+        assert 0 <= action < self.n_vertices, f"Vertex {action} should be in the range [0, {self.n_vertices - 1}]"
         assert self.xv[action] == 0.0, f"Vertex {action} already visited"
 
         # Collect reward
-        reward = self.get_reward(action)
+        reward = -1 / self.n_vertices if self.normalize_reward else -1
 
         # Compute new state
         self.xv[action] = 1.0

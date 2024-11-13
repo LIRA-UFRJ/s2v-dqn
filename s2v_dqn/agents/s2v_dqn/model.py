@@ -1,4 +1,5 @@
 import itertools
+import logging
 import sys
 
 import torch
@@ -11,7 +12,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class QNetwork(nn.Module):
-    def __init__(self, embed_dim=64, embedding_layers=4, n_node_features=4, n_edge_features=1, bias=False, normalize=False):
+    def __init__(self, embedding_layers, n_node_features, n_edge_features, embed_dim=64, bias=False, normalize=False):
         super().__init__()
 
         self.embedding_layers = embedding_layers
@@ -21,29 +22,26 @@ class QNetwork(nn.Module):
 
         self.node_features_embedding_layer = NodeFeaturesEmbeddingLayer(embed_dim, n_node_features, bias)
         self.edge_features_embedding_layer = EdgeFeaturesEmbeddingLayer(embed_dim, n_edge_features, bias, normalize)
-        self.embedding_layer = EmbeddingLayer(
-            embed_dim=embed_dim,
-            n_node_features=n_node_features,
-            n_edge_features=n_edge_features,
-            bias=bias,
-            normalize=normalize
-        )
+        self.embedding_layer = EmbeddingLayer(embed_dim=embed_dim, bias=bias, normalize=normalize)
 
         self.q_layer = QLayer(embed_dim=embed_dim, bias=bias, normalize=normalize)
-    
-    def forward(self, state):
+
+    def forward(self, state, edge_features):
         if state.dim() == 2:
             state = state.unsqueeze(0)
+        if self.n_edge_features > 0 and edge_features.dim() == 3:
+            edge_features = edge_features.unsqueeze(0)
 
-        n = state.shape[1]
         node_features = state[:, :, :self.n_node_features]
-        adj = state[:, :, self.n_node_features:(self.n_node_features + n)]
-        edge_features = state[:, :, (self.n_node_features + n):]
+        adj = state[:, :, self.n_node_features:]
+        # adj = state[:, :, self.n_node_features:(self.n_node_features + n_vertices)]
+        # edge_features = state[:, :, (self.n_node_features + n_vertices):]
 
         # calculate node embeddings
         embeddings = torch.zeros(state.shape[0], state.shape[1], self.embed_dim, requires_grad=True).to(device, dtype=torch.float32)
         node_features_embeddings = self.node_features_embedding_layer(node_features)
-        edge_features_embeddings = self.edge_features_embedding_layer(edge_features, adj)
+        edge_features_embeddings = self.edge_features_embedding_layer(edge_features, adj) if self.n_edge_features > 0 else None
+        # print(f"{edge_features_embeddings=}")
 
         for _ in range(self.embedding_layers):
             embeddings = self.embedding_layer(embeddings, adj, node_features_embeddings, edge_features_embeddings)
@@ -95,7 +93,8 @@ class EdgeFeaturesEmbeddingLayer(nn.Module):
         # edge_features.shape = (batch_size, n_vertices, n_vertices, n_edge_features)
         # x4.shape = (batch_size, n_vertices, n_vertices, embed_dim)
         if edge_features.dim() == 3:
-            edge_features = edge_features.unsqueeze(-1)
+            logging.warning("Wrong number of dimensions")
+
         # x4 = F.relu(self.theta4(edge_features))
         x4 = nn.LeakyReLU()(self.theta4(edge_features))
 
@@ -119,7 +118,7 @@ class EmbeddingLayer(nn.Module):
     """
     Calculate embeddings for all vertices
     """
-    def __init__(self, embed_dim, n_node_features, n_edge_features=1, bias=False, normalize=False):
+    def __init__(self, embed_dim, bias=False, normalize=False):
         super().__init__()
         # self.theta1 = nn.Linear(n_node_features, embed_dim, bias=bias)
         self.theta2 = nn.Linear(embed_dim, embed_dim, bias=bias)
@@ -216,5 +215,7 @@ class QLayer(nn.Module):
         
         # out.shape = (batch_size, n_vertices)
         out = x5.squeeze(-1)
+
+        # print(f"{out.shape=}")
         
         return out        
