@@ -261,6 +261,9 @@ def train(n_runs: int,
     env_extra_params = params.get('env_extra_params', {})
     exact_solution_max_size = params.get('exact_solution_max_size', 20)
     discount_factor = params.get('discount_factor', 1.0)
+    update_params_each = params.get('update_params_each', 4)
+    warmup_steps = params.get('warmup_steps', 1000)
+    target_update = params.get('target_update', 'hard')
 
     # Params without defaults
     n_vertices = params['n_vertices']
@@ -308,6 +311,9 @@ def train(n_runs: int,
             n_edge_features=env.n_edge_features,
             embedding_layers=embedding_layers,
             gamma=discount_factor,
+            update_params_each=update_params_each,
+            warmup_steps=warmup_steps,
+            target_update=target_update,
         )
 
         def lr_lambda(_lr_config: list):

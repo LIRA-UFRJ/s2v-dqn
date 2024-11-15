@@ -19,7 +19,7 @@ LR = 1e-4                 # learning rate
 CLIP_GRAD_NORM_VALUE = 5  # value of gradient to clip while training
 UPDATE_TARGET_EACH = 1000 # number of steps to wait until updating target network
 UPDATE_PARAMS_EACH = 4    # number of steps to wait until sampling experience tuples and updating model params
-WARMUP_STEPS = 1000       # number of steps to wait before
+WARMUP_STEPS = 1000       # number of steps to wait before start learning
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -32,11 +32,11 @@ class DQNAgent(BaseAgent):
     def __init__(
         self,
         problem,
+        n_node_features,
+        n_edge_features,
         nstep=1,
         embedding_dim=64,
         embedding_layers=4,
-        n_node_features=4,
-        n_edge_features=1,
         normalize=True,
         buffer_size=BUFFER_SIZE,
         batch_size=BATCH_SIZE,
@@ -52,7 +52,7 @@ class DQNAgent(BaseAgent):
         """Initialize an Agent object"""
         super().__init__(problem)
 
-        self.nstep = abs(nstep)
+        self.nstep = nstep
         self.use_nstep = nstep > 1
 
         self.gamma = gamma
@@ -76,6 +76,7 @@ class DQNAgent(BaseAgent):
         self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=lr)
 
         self.global_t_step = 0
+        self.update_t_step = 0
 
         # Replay memory
         self.memory = ReplayBuffer(buffer_size, batch_size)
@@ -134,21 +135,6 @@ class DQNAgent(BaseAgent):
         state = torch.from_numpy(state).to(device, dtype=torch.float32)
         edge_feature = torch.from_numpy(edge_feature).to(device, dtype=torch.float32)
 
-        # print(f"{edge_feature.shape=}")
-
-        # TODO: remove this
-        # Valid actions are nodes that:
-        # - aren´t already in the partial solution
-        # - [TSP] can be linked to the final node in tour (or to any node in tour if insertion at any point is allowed)
-        # xv = obs[:, 0]
-        # if self.problem == 'tsp':
-        #     last = obs[:, 1].argmax()
-        #     n_vertices = obs.shape[0]
-        #     adj = obs[:, self.n_node_features:(self.n_node_features + n_vertices)]
-        #     valid_actions = ((xv == 0) * adj[last, :]).nonzero()
-        # else:
-        #     valid_actions = (xv == 0).nonzero()
-
         # Valid actions are nodes that aren´t already in the partial solution
         xv = state[:, 0]
         valid_actions = (xv == 0).nonzero()
@@ -175,7 +161,9 @@ class DQNAgent(BaseAgent):
         if not self.use_nstep:
             # Save experience in replay memory
             self.memory.add(state, edge_feature, action, reward, next_state, next_edge_feature, done)
-            if len(self.memory) > BATCH_SIZE:
+            if len(self.memory) >= BATCH_SIZE \
+                    and self.global_t_step % self.update_params_each == 0 \
+                    and self.global_t_step >= self.warmup_steps:
                 experiences = self.memory.sample()
                 self.learn(experiences)
         else:
@@ -233,26 +221,8 @@ class DQNAgent(BaseAgent):
 
         target_preds = self.qnetwork_target(next_states, next_edge_features)
 
-        # # TODO: remove this
-        # # xv.shape = (batch_size, n_vertices)
-        # xv = next_states[:, :, 0]
-        # if self.problem == 'tsp':
-        #     batch_size, n_vertices, _ = next_states.shape
-        #     # adj.shape = (batch_size, n_vertices, n_vertices)
-        #     adj = next_states[:, :, self.n_node_features:(self.n_node_features + n_vertices)]
-        #     last = next_states[:, :, 1].argmax(dim=1)
-        #     valid_actions_mask = torch.logical_and((xv == 0), adj[torch.arange(batch_size), last])
-        #     invalid_actions_mask = ~valid_actions_mask
-        #     # print(f"{invalid_actions_mask.shape=}")
-        # else:
-        #     invalid_actions_mask = (xv == 1)
         xv = next_states[:, :, 0]
         invalid_actions_mask = (xv == 1)
-
-        # // Not needed anymore
-        # If all nodes are invalid, set first node as valid - so that the agent can return to start of tour on TSP
-        # replace = invalid_actions_mask.sum(axis=1) == invalid_actions_mask.shape[1]
-        # invalid_actions_mask[:, 0] = torch.where(replace, False, invalid_actions_mask[:, 0])
 
         # Calculate q_targets_next for valid actions
         # target_preds.shape = (batch_size, n_vertices)
@@ -286,7 +256,8 @@ class DQNAgent(BaseAgent):
         if self.target_update == "soft":
             self.soft_update(self.qnetwork_local, self.qnetwork_target, self.tau)
         elif self.target_update == "hard":
-            if self.global_t_step % self.update_target_each == 0:
+            self.update_t_step = (self.update_t_step + 1) % self.update_target_each
+            if self.update_t_step  == 0:
                 self.hard_update(self.qnetwork_local, self.qnetwork_target)
 
     def _log_params(self, actions, dones, invalid_actions_mask, loss, next_states, q_expected, q_targets, states, target_preds):

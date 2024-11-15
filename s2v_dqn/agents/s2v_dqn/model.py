@@ -121,7 +121,7 @@ class EmbeddingLayer(nn.Module):
     def __init__(self, embed_dim, bias=False, normalize=False):
         super().__init__()
         # self.theta1 = nn.Linear(n_node_features, embed_dim, bias=bias)
-        self.theta2 = nn.Linear(embed_dim, embed_dim, bias=bias)
+        self.theta2 = nn.Linear(embed_dim, embed_dim, bias=bias, )
         # self.theta3 = nn.Linear(embed_dim, embed_dim, bias=bias)
         # self.theta4 = nn.Linear(n_edge_features, embed_dim, bias=bias) if n_edge_features > 0 else None
         self.normalize = normalize
