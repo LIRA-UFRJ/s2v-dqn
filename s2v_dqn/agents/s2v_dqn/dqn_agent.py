@@ -11,13 +11,13 @@ from s2v_dqn.agents.base_agent import BaseAgent
 from s2v_dqn.agents.s2v_dqn.model import QNetwork
 from s2v_dqn.agents.s2v_dqn.replay_buffer import ReplayBuffer
 
-BUFFER_SIZE = int(1e5)    # replay buffer size
+BUFFER_SIZE = 5000        # replay buffer size
 BATCH_SIZE = 64           # minibatch size
 GAMMA = 1.00              # discount factor
-TAU = 1e-3                # for soft update of target parameters
+TAU = 5e-3                # for soft update of target parameters
 LR = 1e-4                 # learning rate
 CLIP_GRAD_NORM_VALUE = 5  # value of gradient to clip while training
-UPDATE_TARGET_EACH = 1000 # number of steps to wait until updating target network
+UPDATE_TARGET_EACH = 500  # number of steps to wait until updating target network
 UPDATE_PARAMS_EACH = 4    # number of steps to wait until sampling experience tuples and updating model params
 WARMUP_STEPS = 1000       # number of steps to wait before start learning
 
@@ -45,15 +45,17 @@ class DQNAgent(BaseAgent):
         lr=LR,
         clip_grad_norm_value=CLIP_GRAD_NORM_VALUE,
         update_target_each=UPDATE_TARGET_EACH,
-        target_update="hard",
+        target_update="soft",
         update_params_each=UPDATE_PARAMS_EACH,
         warmup_steps=WARMUP_STEPS,
+        double_dqn=False,
     ):
         """Initialize an Agent object"""
         super().__init__(problem)
 
         self.nstep = nstep
         self.use_nstep = nstep > 1
+        self.double_dqn = double_dqn
 
         self.gamma = gamma
         self.clip_grad_norm_value = clip_grad_norm_value
@@ -219,24 +221,35 @@ class DQNAgent(BaseAgent):
         """
         states, edge_features, actions, rewards, next_states, next_edge_features, dones = experiences
 
-        target_preds = self.qnetwork_target(next_states, next_edge_features)
-
         xv = next_states[:, :, 0]
         invalid_actions_mask = (xv == 1)
 
-        # Calculate q_targets_next for valid actions
-        # target_preds.shape = (batch_size, n_vertices)
-        with torch.no_grad():
-            q_targets_next = target_preds.masked_fill(invalid_actions_mask, -1e18).max(1, True)[0]
+        # For Double DQN, first get actions that maximize Q_next using local network,
+        # then use those actions to get Q values using target network
+        if self.double_dqn:
+            with torch.no_grad():
+                local_preds = self.qnetwork_local(next_states, next_edge_features).detach()
+                next_actions = local_preds.masked_fill(invalid_actions_mask, -1e18).max(1, True)[1]
 
-        # Calculate Q value
-        q_expected = self.qnetwork_local(states, edge_features).gather(1, actions)
+                target_preds = self.qnetwork_target(next_states, next_edge_features).detach()
+                q_targets_next = target_preds.gather(1, next_actions)
+        else:
+            target_preds = self.qnetwork_target(next_states, next_edge_features).detach()
+
+            # Calculate q_targets_next for valid actions
+            # target_preds.shape = (batch_size, n_vertices)
+            with torch.no_grad():
+                q_targets_next = target_preds.masked_fill(invalid_actions_mask, -1e18).max(1, True)[0]
 
         # Calc q_targets based on Q_targets_next
         q_targets = rewards + self.gamma_n * q_targets_next * (1 - dones)
 
+        # Calculate Q value
+        q_expected = self.qnetwork_local(states, edge_features).gather(1, actions)
+
         # Calc loss
-        loss = F.mse_loss(q_expected, q_targets)
+        # loss = F.mse_loss(q_expected, q_targets)
+        loss = F.huber_loss(q_expected, q_targets)
 
         self._log_params(actions, dones, invalid_actions_mask, loss, next_states, q_expected, q_targets, states, target_preds)
 
@@ -257,7 +270,8 @@ class DQNAgent(BaseAgent):
             self.soft_update(self.qnetwork_local, self.qnetwork_target, self.tau)
         elif self.target_update == "hard":
             self.update_t_step = (self.update_t_step + 1) % self.update_target_each
-            if self.update_t_step  == 0:
+            if self.update_t_step == 0:
+                # print(f"{self.global_t_step=}")
                 self.hard_update(self.qnetwork_local, self.qnetwork_target)
 
     def _log_params(self, actions, dones, invalid_actions_mask, loss, next_states, q_expected, q_targets, states, target_preds):

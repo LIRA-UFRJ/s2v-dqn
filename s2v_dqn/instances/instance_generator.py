@@ -37,7 +37,11 @@ class InstanceGenerator:
         if self.graph_type == GraphType.ERDOS_RENYI:
             while True:
                 _graph = nx.erdos_renyi_graph(n, p=self.graph_params["p"], seed=rng)
-                if _graph.number_of_edges() > 0:
+                check = True
+                check = check and _graph.number_of_edges() > 0
+                if 'connected' in self.graph_params:
+                    check = check and self.graph_params['connected'] == nx.is_connected(_graph)
+                if check:
                     break
             return _graph
         elif self.graph_type == GraphType.BARABASI_ALBERT:

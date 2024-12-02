@@ -142,7 +142,7 @@ class TSPEnv(BaseEnv):
 #         reward = self.get_reward(self.start_vertex)
 
     def get_best_solution(self, exact_solution_max_size: int, **kwargs) -> float:
-        return TSPSolver.get_solution(self.graph, exact_solution_max_size, return_path=kwargs.get("return_path", False))
+        return TSPSolver.get_solution(self.weighted_graph, exact_solution_max_size, return_path=kwargs.get("return_path", False))
 
     # def get_tour_cost(self):
     #     return sum(self.graph[u][v]["weight"] for (u, v) in zip(self.tour[:-1], self.tour[1:]))
